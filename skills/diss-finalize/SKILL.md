@@ -155,9 +155,7 @@ Phase 1 — 中文摘要终稿（{CHAR_COUNT} 字）
 
 ### 1.7 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: write Chinese abstract"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: write Chinese abstract`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 
@@ -234,9 +232,7 @@ constraint：
 
 ### 2.6 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: write English abstract"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: write English abstract`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 
@@ -296,9 +292,7 @@ Phase 3 — 致谢
 
 ### 3.4 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: add acknowledgement template"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: add acknowledgement template`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 
@@ -367,9 +361,7 @@ Phase 4 — 独创性声明
 
 ### 4.5 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: add originality declaration"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: add originality declaration`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 
@@ -494,9 +486,7 @@ Phase 5.9 — 本科附录检查
 
 ### 5.10 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: format compliance fixes"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: format compliance fixes`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 （如无修改则跳过 commit）
 
@@ -542,9 +532,7 @@ Overfull/Underfull boxes: {N}
 
 ### 6.4 Git Checkpoint
 
-```bash
-git add -A && git commit -m "diss-finalize: final compilation verified"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-finalize: final compilation verified`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 
@@ -568,11 +556,9 @@ git add -A && git commit -m "diss-finalize: final compilation verified"
   - 如前置阶段不符 → 指引先走 /diss-polish
   - 如用户未确认提交 → 提示"全部检查通过后，再次运行 `/diss-finalize check` 并确认提交即可转为 submitted"
 
-### 7.1.5 Git Push（里程碑：定稿完成）
+### 7.1.5 Git Checkpoint（里程碑：定稿完成）
 
-```bash
-git push
-```
+> Checkpoint 卡：列出本步精确文件，经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### 7.2 完成报告
 

@@ -1,197 +1,109 @@
 ---
-description: "WoS 文献批量筛选：XR2026 新锐分区过滤 + LLM 相关性筛选，/lit-plan 和 /lit-review 之间的预处理步骤"
-argument-hint: "<RIS文件路径> <研究方向>"
-allowed-tools: Bash(python3 *) Bash(source *) Bash(mv *) Read
+name: lit-screen
+description: 对一个或多个方向的语料 RIS（direction{N}_wos|cnki|openalex.ris）做可选预筛选：XR2026 新锐分区过滤（免费）+ LLM 相关性筛选（付费，需确认）；结果先写入 _screen_runs/，用户确认后才替换 canonical 文件（原文件备份到 _screen_runs/original/），并记录到 lit_status.md。通常由 lit-workflow 调用，也可单独用于定点筛选。
+argument-hint: "[方向编号…|all]"
 ---
 
-# lit-screen — 文献批量筛选
+# lit-screen — 文献预筛选
 
-## 核心使命
+规格：`~/.claude/skills/shared/ACADEMIC-OS-LITE.md` §3。位于 `lit-plan → lit-workflow【输入整理 → [screen] → review → tag → pool】` 中的 screen 阶段。只做预筛选，不做综述、标签或引用池。
 
-对 WoS 导出的 RIS 文件进行两步筛选：
-1. **XR2026 新锐分区过滤**（零成本，自动执行）：按 ISSN 匹配大类分区，过滤低区期刊
-2. **LLM 相关性筛选**（有 API 成本，用户决定）：用 gpt-4o-mini 逐篇判断是否与研究方向相关
+**允许只筛部分方向**：未筛选的方向在 `lit_status.md` 显示"未筛选"，属于正常状态。
 
-位于 `/lit-plan`（生成检索式）和 `/lit-review`（生成方向报告）之间。
+## 不可违反的规则
 
-## 输入
+- 输入只能是 `structure/2_literature/` 顶层的 canonical 文件（`lit_common.classify_ris` 识别：`direction{N}_{wos|cnki|openalex}.ris`）；CNKI 的 `.enw` 须先由 lit-workflow 转换。
+- 所有中间结果只写 `structure/2_literature/_screen_runs/<运行目录>/`，顶层不出现任何 `_zone`/`_llm` 文件。
+- **替换 canonical 必须在用户确认 dry-run 计划之后**，且只用 `finalize_screen.py --execute` 完成；不用 `rm`/`mv` 手工收尾。
+- 替换前校验：最终 RIS 的 TY = ER > 0；它的每条记录块按原顺序出现在 canonical 中（有序子集，续行原样保留）；LLM 审计与结果逐条一致；运行结果对应的是 canonical 的当前内容。
+- 原文件备份到 `_screen_runs/original/<文件名>`；若该处已有更早的原始备份，则当前文件备份为 `<运行目录>/before_<文件名>`。任何备份都不覆盖。
+- API key 只从环境变量 `CHATANYWHERE_API_KEY` 读取：不 `echo`、不写进命令行参数（脚本拒绝 `--api-key`）、不开 shell xtrace。
+- LLM 有费用：执行前必须确认。API 错误、解析异常一律默认保留。
 
-- `$ARGUMENTS` 格式：`<RIS文件路径> <研究方向>`
-- 研究方向可以从项目 `idea.md` 中提取（如果用户在项目目录下运行且未指定）
+脚本目录：`~/.claude/skills/lit-screen/`（`screen_xr.py`、`screen_llm.py`、`finalize_screen.py`）。
 
-## 执行流程
+## Step 0：确定范围
 
-### Step 0: 解析参数
+1. 读 `structure/2_literature/literature_search_plan.md` 方向表与 `_quota_result.json`；运行状态脚本查看各方向篇数与配额比：
+   ```bash
+   python3 ~/.claude/skills/lit-workflow/lit_status.py --project-root . --no-write
+   ```
+2. 由参数或用户选择要筛选的 (方向, 来源)。备注列出现"建议筛选"（篇数 > 1.5 × 该来源配额）时一并说明。
+3. 每个方向的方向描述 `DIRECTION_TEXT` 取自方向表名称 + 该方向"论文角色"，不得猜测。信息不足时用 AskUserQuestion 询问。
 
-从 `$ARGUMENTS` 中提取：
-- **ris_path**：RIS 文件的绝对路径
-- **direction**：研究方向关键词（如 "博弈论"、"供应链韧性"）
+以下 Step 1–5 对每个选中的 canonical 文件**逐个**执行。
 
-如果用户只给了 RIS 路径没给方向，从当前项目的 `idea.md` 提取研究主题。
-如果都没给，AskUserQuestion 询问。
-
-### Step 1: XR2026 新锐分区过滤（自动执行）
-
-运行脚本：
-
-```bash
-python3 ~/.claude/skills/lit-screen/screen_xr.py "<ris_path>" --zone 2
-```
-
-脚本输出 JSON 到 stdout，包含：
-- `original`：原始文献总数
-- `zone_distribution`：各分区数量（1区/2区/3区/4区/未匹配）
-- `kept`：匹配到的 1-2 区文献数
-- `unmatched`：ISSN 未匹配数（默认保留）
-- `kept_with_unmatched`：保留总数（匹配 + 未匹配）
-- `removed`：被过滤的文献数
-- `output_path`：筛选后 RIS 文件路径
-
-**向用户汇报（必须包含以下信息）：**
-
-```
-XR2026 新锐分区筛选结果：
-
-| 分区 | 数量 |
-|------|------|
-| 1 区 | xxx  |
-| 2 区 | xxx  |
-| 3 区 | xxx  |
-| 4 区 | xxx  |
-| 未匹配 | xxx |
-| **合计** | **xxx** |
-
-保留 1-2 区 + 未匹配 → xxx 篇
-过滤掉 3-4 区 → xxx 篇
-筛选后 RIS：<output_path>
-```
-
-### Step 2: 用户决策
-
-展示 Step 1 结果后，AskUserQuestion **一次性**询问用户：
-
-> XR2026 分区筛选结果如上。请决定：
-> 1. **分区筛选**：应用（保留 1-2 区）还是跳过（保留全部）？
-> 2. **LLM 相关性筛选**：是否继续？（预估成本：每 1000 篇约 $0.075，用 gpt-4o-mini）
-
-根据用户回答确定 **后续输入 RIS**：
-- 应用分区 → 后续以 `_zone2.ris` 为基础
-- 跳过分区 → 后续以原始 RIS 为基础
-- 不跑 LLM → **仍需进入 Step 4 归档**（若用户应用了分区，`_zone2.ris` 与原始 `.ris` 共存会导致 /lit-review glob 冲突；只有"跳过分区 + 不跑 LLM"才无冲突可直接结束）
-- 跑 LLM → 进入 Step 3，输入为上面确定的 RIS
-
-### Step 3: LLM 相关性筛选（用户确认后执行）
-
-读取 API Key：
+## Step 1：XR2026 分区（只读 canonical）
 
 ```bash
-source ~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh && echo $CHATANYWHERE_API_KEY
+python3 ~/.claude/skills/lit-screen/screen_xr.py structure/2_literature/direction{N}_{source}.ris --zone 2
 ```
 
-运行脚本：
+从 stdout JSON 读取 `run_dir`、`output_path`（`xr_zone2.ris`）、`csv_path`，不要按文件名猜。向用户报告：
+
+| 分区 | 1 区 | 2 区 | 3 区 | 4 区 | 未匹配 | 合计 |
+|---|---|---|---|---|---|---|
+
+保留 1–2 区 + 未匹配 → X 篇；过滤 3–4 区 → Y 篇。ISSN/刊名未匹配（新刊、会议、中文刊）默认保留。`output_path` 为 null 表示全部被过滤，此时不能应用分区。
+
+## Step 2：一次性确认筛选选择（用户确认点）
+
+用 AskUserQuestion 一次问清：
+- 分区：应用（保留 1–2 区与未匹配）/ 跳过；
+- LLM：执行 / 跳过（估算：gpt-4o-mini 约每 1000 篇 0.075 美元，以实际计费为准）。
+
+| 分区 | LLM | LLM 输入 | FINAL_RIS | mode |
+|---|---|---|---|---|
+| 应用 | 执行 | Step 1 的 `output_path` | LLM 的 `output_path`（`llm.ris`） | `zone+llm` |
+| 跳过 | 执行 | canonical | LLM 的 `output_path` | `llm` |
+| 应用 | 跳过 | — | Step 1 的 `output_path` | `zone` |
+| 跳过 | 跳过 | — | — | 不筛选：canonical 保持不变，结束（状态表显示"未筛选"） |
+
+## Step 3：LLM 相关性（仅在已确认时）
+
+在同一条命令中加载密钥文件并运行，只检查变量非空，不输出值：
 
 ```bash
-# <INPUT_RIS> = Step 2 用户决策后确定的输入 RIS（应用分区→*_zone2.ris；跳过分区→原始.ris）
-source ~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh && \
-python3 ~/.claude/skills/lit-screen/screen_llm.py "<INPUT_RIS>" \
-  --direction "<direction>" \
-  --api-key "$CHATANYWHERE_API_KEY" \
-  --threads 20
+set +x
+source "$HOME/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh"
+test -n "${CHATANYWHERE_API_KEY:-}" || { echo "CHATANYWHERE_API_KEY 未配置" >&2; exit 1; }
+python3 ~/.claude/skills/lit-screen/screen_llm.py "<LLM 输入>" --direction "<DIRECTION_TEXT>" --threads 20
 ```
 
-脚本输出 JSON 到 stdout，包含：
-- `input`：输入文献数
-- `relevant`：相关文献数
-- `irrelevant`：不相关文献数
-- `errors`：API 调用失败数
-- `output_path`：筛选后 RIS 文件路径
-- `removed_titles`：被移除的论文标题列表（最多 30 篇）
+输入是 Step 1 的 `xr_zone2.ris` 时自动沿用同一运行目录；输入是 canonical 时新建运行目录。stdout JSON 给出 `run_dir`、`output_path`、`excluded_output`、`audit_output`（`decisions.jsonl`）与各类计数。
 
-**向用户汇报：**
+### 必做抽检（发布前）
+1. `retain + exclude + error_retain = input`，`decisions.jsonl` 每条输入一行。
+2. 抽查至少 10 条：优先 5 条 exclude、3 条 retain、全部 error_retain（多于 2 条则抽 2 条），不足用其他类别补足；对照标题、摘要和理由，确认续行摘要完整。
+3. 发现系统性误判、缺行、摘要截断或计数不一致 → 不发布，修正后重跑；不得手改最终 RIS。一个运行目录只容纳一次 LLM 结果：`zone+llm` 分支从 Step 1 重跑（XR 免费，得到新运行目录），`llm` 分支直接重跑 Step 3（自动新建运行目录）。
+4. 向用户报告抽检结论与前 10 条被排除标题。错误率异常（如 > 10%）时先暂停，询问是否重跑。
 
-```
-LLM 相关性筛选结果（方向：{direction}）：
-
-输入：xxx 篇
-相关：xxx 篇 ✓
-不相关：xxx 篇 ✗
-错误：xxx 篇（已默认保留）
-
-筛选后 RIS：<output_path>
-```
-
-如果有被移除的论文，列出前 10 篇的标题供用户快速检查。
-
-### Step 4: 收尾 — 用最终结果覆盖原始 RIS，清理中间产物
-
-**⚠️ 下游保护**：`/lit-review` 的 `dispatch_plan.py` 用 `ris_dir.glob("*.ris")` 扫描方向文件，如果原始 `{stem}.ris`、筛选产物 `{stem}_zone2.ris` / `{stem}_zone2_llm.ris` 共存于同一目录，会被视为不同批次**重复消费**，造成配额超额与重复打标。收尾必须把它们合并为单一的 `{stem}.ris`。
-
-**前提约定**：用户**自行在项目外层**（例如 `../raw_literature/`）维护原始 RIS 备份；skill **不在项目目录内做备份**，收尾直接删除中间产物与被覆盖的原始文件。
-
-**确定 FINAL_RIS**:
-- 跑了 LLM → `{stem}_zone2_llm.ris`
-- 仅跑 zone → `{stem}_zone2.ris`
-- 两轮都跳 → 原始 `.ris` 就是 FINAL，**无需收尾**，直接结束
-
-**在同一 bash 块内赋值**（跨 Bash 工具调用变量会丢失）：
+## Step 4：dry-run 替换计划
 
 ```bash
-# <FINAL_RIS> = 本次筛选链路最终产出的 RIS（见上方"确定 FINAL_RIS"）
-RIS_DIR=$(dirname "<FINAL_RIS>")
-STEM_ORIG=$(basename "<FINAL_RIS>" | sed -E 's/(_zone[0-9]+)?(_llm)?\.ris$//')
-echo "RIS 所在目录: $RIS_DIR, 原始 stem: $STEM_ORIG"
+python3 ~/.claude/skills/lit-screen/finalize_screen.py \
+  --canonical structure/2_literature/direction{N}_{source}.ris \
+  --final-ris "<FINAL_RIS>" --run-dir "<run_dir>" --mode <zone|llm|zone+llm> --dry-run
 ```
 
-然后 AskUserQuestion 确认：
+向用户完整展示：canonical、替换前后篇数、有序子集校验、XR/LLM 运行校验、备份位置、写入筛选记录的方法说明（`method`）。
+
+## Step 5：确认后执行（用户确认点）
+
+用户明确同意上一步的具体计划后，把 `--dry-run` 换成 `--execute`，其余参数逐字不变。脚本依次：备份原文件 → 原子替换 canonical → 复核篇数 → 在 `lit_status.md`「筛选记录」追加一行并刷新状态表。
+
+若输出含 `warning`（状态记录失败），canonical 已替换成功；按提示中的 `lit_status.py record-screen …` 命令补记即可。
+
+任何校验失败：canonical 不变，`_screen_runs/` 中的结果保留供排查；修正后重跑相应步骤。
+
+## 结束汇报
 
 ```
-筛选完成。路径: ${RIS_DIR}/${STEM_ORIG}
-
-执行收尾清理：
-  · <FINAL_RIS> → ${STEM_ORIG}.ris（覆盖原始文件）
-  · 删除中间产物 ${STEM_ORIG}_zone[0-9]+.ris（若存在）
-  · 删除 ${STEM_ORIG}_screening.csv（若存在）
-
-前提：原始 RIS 备份已由用户在项目外层维护（skill 不在项目内备份）。
-
-  (1) 确认执行
-  (2) 取消（⚠️ /lit-review 会把原始 .ris 和 <FINAL_RIS> 都扫进去，等于双倍打标）
+D{N}/{source}：原始 X 篇 → [XR≤2区] Y 篇 → [LLM] Z 篇（已替换 canonical）
+原文件备份：structure/2_literature/_screen_runs/original/direction{N}_{source}.ris
+运行目录：structure/2_literature/_screen_runs/<run>/
 ```
 
-用户选 (1)（同一 bash 块内执行，避免 `${RIS_DIR}` / `${STEM_ORIG}` 丢失）：
-```bash
-# 1. 若原始 .ris 存在且不等于 FINAL_RIS，先删除（给 FINAL 让位）
-if [ -f "${RIS_DIR}/${STEM_ORIG}.ris" ] && [ "<FINAL_RIS>" != "${RIS_DIR}/${STEM_ORIG}.ris" ]; then
-  rm "${RIS_DIR}/${STEM_ORIG}.ris"
-fi
-# 2. 把 FINAL 重命名为原名（若 FINAL 本身就叫 ${STEM_ORIG}.ris，mv 会 no-op 或报错，用 || true 屏蔽）
-[ "<FINAL_RIS>" != "${RIS_DIR}/${STEM_ORIG}.ris" ] && \
-  mv "<FINAL_RIS>" "${RIS_DIR}/${STEM_ORIG}.ris"
-# 3. 清理中间产物（所有 _zone[0-9]+.ris + screening.csv，-f 保证不报错）
-rm -f "${RIS_DIR}/${STEM_ORIG}"_zone*.ris \
-      "${RIS_DIR}/${STEM_ORIG}_screening.csv"
-```
-
-用户选 (2)：不动；在完成提示中复述冲突机制（`/lit-review` 会把原始 `.ris` 和 `<FINAL_RIS>` 各自消费一遍）。
-
-汇报完整筛选链路：
-
-```
-筛选完成：
-原始 → xxx 篇
-  ↓ XR2026 分区过滤（1-2区）
-xxx 篇
-  ↓ LLM 相关性筛选（{direction}）
-xxx 篇 ← 最终结果
-
-产出: ${RIS_DIR}/${STEM_ORIG}.ris（已覆盖原始，清理完中间产物）
-外部备份: 用户自行维护（skill 不在项目内留备份）
-可直接用于 /lit-review
-```
-
-## 注意事项
-
-- XR2026 中 ISSN 未匹配的论文**默认保留**（可能是新刊、会议论文、或数据库差异）
-- LLM 筛选中 API 调用失败的论文**默认保留**（宁可多留不误删）
-- LLM prompt 基于六非博 Literature Review Software 7B 改进，支持主题相关和方法相关两种判定
-- 不修改原始 RIS 文件，所有输出生成新文件
+- 未筛选的方向保持"未筛选"，可直接进入 review。
+- 若由 lit-workflow 调用，回到 lit-workflow 继续；单独调用时建议接着运行 `/lit-workflow from=review`。
+- 不自动 commit。建议提交范围：`structure/2_literature/direction{N}_{source}.ris`、`lit_status.md`；`_screen_runs/` 是否入库由用户决定（体积可能较大）。

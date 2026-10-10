@@ -3,7 +3,7 @@
 cnki_enw_to_ris.py — CNKI EndNote (.enw) → 标准 RIS 格式转换
 
 将中国知网导出的 EndNote 格式文献转换为标准 RIS 格式，
-使其能无缝接入现有的 /lit-review → /lit-tag → /lit-pool 管线。
+使其能接入 lit-workflow 文献管线（输入整理阶段转换为 direction{N}_cnki.ris）。
 
 用法:
     python3 cnki_enw_to_ris.py --input data.enw --output data.ris
@@ -20,6 +20,8 @@ cnki_enw_to_ris.py — CNKI EndNote (.enw) → 标准 RIS 格式转换
 """
 
 import argparse
+import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -271,9 +273,20 @@ def main():
                         help="跳过报纸类文献 (Newspaper Article)")
     parser.add_argument("--dry-run", action="store_true",
                         help="仅预览统计，不写文件")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="显式覆盖已存在输出；仅可在展示旧/新 hash 并经用户确认后使用")
     args = parser.parse_args()
 
     output_path = Path(args.output)
+    canonical = re.fullmatch(r"(?i)direction(\d+)_cnki\.ris", output_path.name)
+    if not canonical:
+        print(
+            "ERROR: CNKI output must be directionN_cnki.ris; combined or unmapped "
+            "outputs cannot enter lit-review",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    expected_direction = int(canonical.group(1))
     all_stats = {"total_parsed": 0, "converted": 0, "skipped_newspaper": 0,
                  "year_missing": 0, "year_extracted": 0, "types": {}}
     all_warnings = []
@@ -282,8 +295,15 @@ def main():
     for input_file in args.input:
         input_path = Path(input_file)
         if not input_path.exists():
-            print(f"⚠ 跳过不存在的文件: {input_path}", file=sys.stderr)
-            continue
+            print(f"ERROR: input file does not exist: {input_path}", file=sys.stderr)
+            sys.exit(1)
+        input_match = re.match(r"(?i)^direction(\d+)_cnki(?:[_-].*)?\.enw$", input_path.name)
+        if not input_match or int(input_match.group(1)) != expected_direction:
+            print(
+                f"ERROR: {input_path.name} is not a direction{expected_direction}_cnki*.enw input",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         # 一次性解析：收集 RIS 块 + 统计
         text = input_path.read_text(encoding="utf-8")
@@ -310,9 +330,39 @@ def main():
             all_ris_blocks.append(ris)
             all_stats["converted"] += 1
 
-    # 统一写入
-    if not args.dry_run and all_ris_blocks:
-        output_path.write_text("\n\n".join(all_ris_blocks) + "\n", encoding="utf-8")
+    if all_stats["total_parsed"] <= 0 or all_stats["converted"] <= 0:
+        print("ERROR: conversion produced zero RIS records", file=sys.stderr)
+        sys.exit(1)
+
+    # 统一原子写入；转换失败或 0 条时绝不留下空的 canonical RIS。
+    payload = "\n\n".join(all_ris_blocks) + "\n"
+    prospective_sha256 = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    existing_sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest() if output_path.exists() else None
+    if existing_sha256:
+        print(f"现有输出 SHA-256: {existing_sha256}")
+    print(f"拟生成输出 SHA-256: {prospective_sha256}")
+    if output_path.exists() and not args.dry_run and not args.overwrite:
+        print(
+            f"ERROR: output already exists: {output_path}; run --dry-run, show old/new hashes, "
+            "obtain confirmation, then pass --overwrite",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not args.dry_run:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        ty = len(re.findall(r"^TY  - ", payload, re.MULTILINE))
+        er = len(re.findall(r"^ER  -\s*", payload, re.MULTILINE))
+        if ty != er or ty != all_stats["converted"]:
+            print(
+                f"ERROR: converted RIS integrity failure TY={ty}, ER={er}, "
+                f"converted={all_stats['converted']}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        tmp = output_path.with_name(f".{output_path.name}.tmp-{os.getpid()}")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, output_path)
 
     # 打印报告
     print("=" * 60)
@@ -341,7 +391,7 @@ def main():
 
     if all_stats["year_missing"] > 0:
         print(f"\n💡 提示: {all_stats['year_missing']}条文献年份缺失，"
-              "建议在 RIS 文件中手动补充 PY 字段，或在 /lit-review 筛选时由 LLM 推断。")
+              "建议在 RIS 文件中手动补充 PY 字段（入选文献缺年份会在 review 合并时阻断）。")
 
     # 退出码: 有年份缺失用 0 (warning), 解析失败用 1
     sys.exit(0)

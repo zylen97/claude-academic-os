@@ -1,647 +1,424 @@
 #!/usr/bin/env python3
+"""Deterministic work split for the literature review and tag stages.
+
+  --mode ris     review stage: canonical direction{N}_{wos|cnki|openalex}.ris
+                 -> _review_runs/dispatch_plan.json + one fill-in batch file per
+                    <=30 records (+ the exact RIS chunk the worker reads)
+  --mode report  tag stage: direction{N}_report.md
+                 -> _tag_runs/dispatch_plan.json + one tag template per <=30 rows
+
+The two plans live in different run directories and never overwrite each other.
+Re-running is a resume: a batch file whose records still match is kept as is;
+a batch whose records changed is moved to _archive/ and regenerated.
+
+Identical copies: ~/.claude/skills/shared/ and ~/.codex/skills/_academic-shared/scripts/.
 """
-dispatch_plan.py — SubAgent 调度计划生成器（共用）
-
-扫描文件 → 计数条目 → 按 AGENT_ITEM_LIMIT 拆分 → 生成调度表。
-供 lit-review / lit-tag / lit-pool 三个 skill 共用。
-
-模式:
-    ris     — 扫描 RIS 文件，计数 TY 行（lit-review 用）
-    report  — 扫描 direction reports，计数入选文献行（lit-tag 用）
-    pool    — 读取 pool_prepare.py 输出的 JSON（备用模式，lit-pool 默认由 pool_prepare.py 内部调度）
-
-用法:
-    # lit-review: 扫描 RIS 文件
-    python3 dispatch_plan.py --mode ris \
-        --input-dir structure/2_literature/ \
-        --plan-file structure/2_literature/literature_search_plan.md \
-        --limit 30
-
-    # lit-tag: 扫描 direction reports
-    python3 dispatch_plan.py --mode report \
-        --input-dir structure/2_literature/ \
-        --limit 30
-
-    # lit-pool: 读取 pool JSON
-    python3 dispatch_plan.py --mode pool \
-        --pool-json structure/2_literature/_pool_prepare.json \
-        --limit 30
-
-输出:
-    stdout — 调度表 markdown + 校验摘要
-    JSON — dispatch_plan.json（供主 Agent 读取调度信息）
-"""
+from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
-import math
+import os
 import re
 import sys
-from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lit_common as lc  # noqa: E402
 
-AGENT_ITEM_LIMIT = 30
-MAX_CONCURRENT = 8
+ITEM_LIMIT = 30
+REVIEW_DIR = "_review_runs"
+TAG_DIR = "_tag_runs"
+BATCH_PREFIX = "<!-- lit-batch: "
+TAGS_PREFIX = "<!-- lit-tags: "
+SOURCE_ORDER = {s: i for i, s in enumerate(lc.SOURCES)}  # wos, cnki, openalex
+REVIEW_FIELDS = ("标题", "有摘要", "决定", "级别", "理由", "证据", "疑似竞品")
 
 
-# ---------------------------------------------------------------------------
-# Mode: ris — 扫描 RIS 文件
-# ---------------------------------------------------------------------------
-
-def scan_ris(input_dir: str, plan_file: str | None, directions_filter: list[int] | None) -> list[dict]:
-    """扫描 RIS 文件，返回每个方向的信息。"""
-    ris_dir = Path(input_dir)
-    items = []
-
-    # 读取 plan 文件提取配额（如有）
-    quotas = {}
-    if plan_file:
-        try:
-            with open(plan_file, encoding="utf-8") as f:
-                content = f.read()
-            for m in re.finditer(r"\|\s*D?(\d+)\s*\|[^|]*\|[^|]*\|[^|]*\|\s*(?:WoS\s*)?(\d+)\s*篇", content):
-                quotas[int(m.group(1))] = int(m.group(2))
-        except Exception:
-            pass
-
-    # Bug 6 fix: 从 _quota_result.json 读取精确的 per-source 配额（双轨模式）
-    wos_quotas: dict[int, int] = {}
-    cnki_quotas: dict[int, int] = {}
-    qr_path = ris_dir / "_quota_result.json"
-    if qr_path.exists():
-        try:
-            with open(qr_path, encoding="utf-8") as f:
-                qr = json.load(f)
-            if qr.get("dual_mode"):
-                for d_entry in qr["directions"]:
-                    did = d_entry["id"]
-                    wos_quotas[did] = d_entry["wos_quota"]
-                    cnki_quotas[did] = d_entry.get("cnki_quota", 0)
-        except Exception:
-            pass
-
-    for fp in sorted(ris_dir.glob("*.ris")):
-        # 从文件名提取方向编号（如 1_xxx.ris 或 1-xxx.ris）
-        m = re.match(r"(\d+)[_\-]", fp.name)
-        if not m:
-            continue
-        d = int(m.group(1))
-        if directions_filter and d not in directions_filter:
-            continue
-
-        # 计数 TY 行
-        try:
-            with open(fp, encoding="utf-8-sig") as f:
-                content = f.read()
-            count = len(re.findall(r"^TY  - ", content, re.MULTILINE))
-        except Exception:
-            count = 0
-
-        # 按源文件类型分配正确配额
-        is_cnki = "_cnki" in fp.name
-        if is_cnki and cnki_quotas:
-            quota = cnki_quotas.get(d, quotas.get(d, 0))
-        elif wos_quotas:
-            quota = wos_quotas.get(d, quotas.get(d, 0))
-        else:
-            quota = quotas.get(d, 0)
-
-        items.append({
-            "direction": d,
-            "source_file": fp.name,
-            "item_count": count,
-            "quota": quota,
-        })
-
-    return items
+class PlanError(Exception):
+    pass
 
 
 # ---------------------------------------------------------------------------
-# Mode: report — 扫描 direction reports
+# search plan / quota
 # ---------------------------------------------------------------------------
 
-def scan_reports(input_dir: str, directions_filter: list[int] | None) -> list[dict]:
-    """扫描 direction reports，计数入选文献。"""
-    report_dir = Path(input_dir)
-    items = []
-
-    for fp in sorted(report_dir.glob("direction*_report.md")):
-        # 提取方向编号
-        m = re.match(r"direction(\d+)", fp.name)
-        if not m:
-            continue
-        d = int(m.group(1))
-        if directions_filter and d not in directions_filter:
-            continue
-
-        try:
-            with open(fp, encoding="utf-8") as f:
-                content = f.read()
-        except Exception:
-            continue
-
-        # 计数表格行（| 数字 | 开头的行 = 文献条目）
-        count = len(re.findall(r"^\|\s*\d+\s*\|", content, re.MULTILINE))
-
-        items.append({
-            "direction": d,
-            "source_file": fp.name,
-            "item_count": count,
-        })
-
-    return items
+def fallback_caps(quota: int) -> dict[str, int]:
+    core = -(-quota * 25 // 100)
+    important = -(-quota * 40 // 100)
+    return {"core": core, "important": important, "backup": max(0, quota - core - important)}
 
 
-# ---------------------------------------------------------------------------
-# Mode: pool — 读取 pool_prepare.py 输出
-# ---------------------------------------------------------------------------
+def load_plan(lit_dir: Path, plan_file: Path | None = None) -> dict:
+    """Directions, names, per-track quota/tier caps and total budget.
 
-def scan_pool(pool_json: str) -> list[dict]:
-    """读取 pool_prepare.py 的输出 JSON，按标签分组。"""
-    try:
-        with open(pool_json, encoding="utf-8") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"ERROR: Cannot read {pool_json}: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    items = []
-    for tag_group in data.get("tag_groups", []):
-        items.append({
-            "tag": tag_group["tag"],
-            "item_count": tag_group["count"],
-            "source_directions": tag_group.get("source_directions", []),
-        })
-
-    return items
-
-
-# ---------------------------------------------------------------------------
-# 通用：拆分 + 贪心合并
-# ---------------------------------------------------------------------------
-
-def split_items(items: list[dict], limit: int) -> list[dict]:
-    """对每个 item 按 limit 拆分，返回 agent 任务列表。"""
-    agents = []
-    agent_id = 1
-
-    for item in items:
-        count = item["item_count"]
-        if count == 0:
-            continue
-
-        n_agents = math.ceil(count / limit)
-        per_agent = math.ceil(count / n_agents)
-
-        for i in range(n_agents):
-            start = i * per_agent + 1
-            end = min((i + 1) * per_agent, count)
-            actual = end - start + 1
-
-            agent = {
-                "agent_id": agent_id,
-                "item_range": f"{start}-{end}",
-                "item_count": actual,
-                "split_info": f"{i + 1}/{n_agents}" if n_agents > 1 else "独立",
-            }
-            # 复制 item 的元信息
-            for key in ["direction", "source_file", "quota", "tag", "source_directions"]:
-                if key in item:
-                    agent[key] = item[key]
-
-            # 按比例分配配额（如有）
-            if "quota" in item and item["quota"] > 0:
-                agent["quota_share"] = math.ceil(item["quota"] / n_agents)
-
-            agents.append(agent)
-            agent_id += 1
-
-    return agents
-
-
-def assign_batch_seq(agents: list[dict]) -> None:
-    """Assign globally-unique per-direction batch sequence numbers.
-
-    When a direction has multiple source files (e.g., WoS + CNKI),
-    split_info resets per source file (both get "1/2", "2/2").
-    batch_seq increments across all source files within a direction,
-    providing unique filenames: d1_batch1, d1_batch2, d1_batch3, d1_batch4.
-
-    Also infers source_type ("wos" or "cnki") from source_file name.
+    _quota_result.json (lit-plan) is authoritative; without it the search plan's
+    '## 方向N' headings and '| D1 | ... | 40篇 |' rows are used.
     """
-    dir_counter: dict = defaultdict(int)
-    for a in agents:
-        d = a.get("direction") or a.get("tag", 0)
-        dir_counter[d] += 1
-        a["batch_seq"] = dir_counter[d]
-        # Bug 4: infer source_type from source_file
-        sf = a.get("source_file", "")
-        if sf:
-            a["source_type"] = "cnki" if "_cnki" in sf else "wos"
+    quota_path = lit_dir / "_quota_result.json"
+    plan_path = plan_file or lit_dir / "literature_search_plan.md"
+    out = {"directions": [], "names": {}, "tracks": {}, "budget": 0, "source": ""}
+    if quota_path.exists():
+        try:
+            data = json.loads(quota_path.read_text(encoding="utf-8"))
+            for e in data.get("directions", []):
+                d = int(e["id"])
+                out["directions"].append(d)
+                out["names"][d] = str(e.get("name") or f"方向{d}")
+                wq = int(e.get("wos_quota", e.get("quota", 0)) or 0)
+                out["tracks"][(d, "wos")] = {"quota": wq, "tiers": e.get("wos_tiers") or fallback_caps(wq)}
+                cq = int(e.get("cnki_quota", 0) or 0)
+                if cq > 0:
+                    out["tracks"][(d, "cnki")] = {"quota": cq, "tiers": e.get("cnki_tiers") or fallback_caps(cq)}
+            out["budget"] = int(data.get("total_budget", 0) or 0)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise PlanError(f"QUOTA_JSON_INVALID: {quota_path}: {exc}") from exc
+        out["source"] = quota_path.name
+    elif plan_path.exists():
+        text = plan_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"^#{2,4}\s*(?:方向|Direction)\s*D?(\d+)\s*[：:]?\s*(.*)$", text, re.M | re.I):
+            d = int(m.group(1))
+            if d not in out["directions"]:
+                out["directions"].append(d)
+                out["names"][d] = m.group(2).strip() or f"方向{d}"
+        for m in re.finditer(r"^\|\s*D(\d+)\b[^\n]*?\|\s*(\d+)\s*篇\s*\|", text, re.M):
+            d, q = int(m.group(1)), int(m.group(2))
+            if d not in out["directions"]:
+                out["directions"].append(d)
+                out["names"].setdefault(d, f"方向{d}")
+            out["tracks"][(d, "wos")] = {"quota": q, "tiers": fallback_caps(q)}
+        out["source"] = plan_path.name
+    else:
+        raise PlanError(f"PLAN_MISSING: neither {quota_path.name} nor {plan_path.name} in {lit_dir}")
+    out["directions"] = sorted(set(out["directions"]))
+    if not out["directions"]:
+        raise PlanError(f"PLAN_DIRECTIONS_UNPARSEABLE: {out['source']}")
+    for (d, track), cfg in out["tracks"].items():
+        caps = {t: int(cfg["tiers"].get(t, 0)) for t in lc.TIERS}
+        if sum(caps.values()) != cfg["quota"]:
+            raise PlanError(f"TIER_CAPS_MISMATCH: D{d}/{track} caps {caps} != quota {cfg['quota']}")
+        cfg["tiers"] = caps
+    return out
 
 
-def greedy_merge_small(agents: list[dict], limit: int) -> list[dict]:
-    """贪心合并小任务（仅用于 pool 模式）。
-    将 item_count ≤ limit/2 的 agent 尝试合并到一个 agent 中。"""
-    small = [a for a in agents if a["item_count"] <= limit // 2]
-    large = [a for a in agents if a["item_count"] > limit // 2]
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 
-    if not small:
-        return agents
-
-    # 按 item_count 降序排列，贪心装箱
-    small.sort(key=lambda x: x["item_count"], reverse=True)
-    bins: list[list[dict]] = []
-    bin_sums: list[int] = []
-
-    for item in small:
-        placed = False
-        for i, s in enumerate(bin_sums):
-            if s + item["item_count"] <= limit:
-                bins[i].append(item)
-                bin_sums[i] += item["item_count"]
-                placed = True
-                break
-        if not placed:
-            bins.append([item])
-            bin_sums.append(item["item_count"])
-
-    # 将合并的 bins 转为 merged agents
-    merged = list(large)
-    agent_id = max((a["agent_id"] for a in agents), default=0) + 1
-
-    for bin_items in bins:
-        if len(bin_items) == 1:
-            merged.append(bin_items[0])
+def ris_field(block: str, tag: str) -> str:
+    """All values of one RIS tag, continuation lines joined (verbatim records)."""
+    values: list[str] = []
+    active = False
+    for line in block.splitlines():
+        m = re.match(r"^([A-Z][A-Z0-9])  -\s?(.*)$", line)
+        if m:
+            active = m.group(1) == tag
+            if active:
+                values.append(m.group(2).strip())
+        elif active and line[:1] in (" ", "\t") and values:
+            values[-1] += " " + line.strip()
         else:
-            tags = []
-            total = 0
-            dirs = []
-            for item in bin_items:
-                if "tag" in item:
-                    tags.append(item["tag"])
-                total += item["item_count"]
-                if "source_directions" in item:
-                    dirs.extend(item["source_directions"])
-            merged.append({
-                "agent_id": agent_id,
-                "tag": "+".join(tags),
-                "item_count": total,
-                "split_info": "合并",
-                "source_directions": sorted(set(dirs)),
-                "merged_from": [i["agent_id"] for i in bin_items],
+            active = False
+    return " ".join(v for v in values if v).strip()
+
+
+def ris_values(block: str, tag: str) -> list[str]:
+    out = []
+    for line in block.splitlines():
+        m = re.match(rf"^{tag}  -\s?(.*)$", line)
+        if m and m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def record_title(block: str) -> str:
+    return ris_field(block, "TI") or ris_field(block, "T1")
+
+
+def atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_meta(text: str, prefix: str) -> dict | None:
+    for line in text.splitlines():
+        if line.startswith(prefix) and line.rstrip().endswith("-->"):
+            try:
+                return json.loads(line[len(prefix):line.rstrip().rfind("-->")].strip())
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def meta_line(prefix: str, meta: dict) -> str:
+    return f"{prefix}{json.dumps(meta, ensure_ascii=False, sort_keys=True)} -->"
+
+
+def parse_review_batch(text: str) -> list[dict]:
+    """Blocks '### <record_id>' with '- 字段: 值' lines (continuations appended)."""
+    blocks: list[dict] = []
+    cur: dict | None = None
+    last = None
+    for line in text.splitlines():
+        h = re.match(r"^###\s+(D\d+-[a-z]+-\d+)\s*$", line.strip())
+        if h:
+            cur = {"record_id": h.group(1)}
+            blocks.append(cur)
+            last = None
+            continue
+        if cur is None:
+            continue
+        f = re.match(r"^\s*[-*]\s*(\S+?)\s*[:：]\s?(.*)$", line)
+        if f and f.group(1) in REVIEW_FIELDS:
+            last = f.group(1)
+            cur[last] = f.group(2).strip()
+        elif last and line.strip() and not line.lstrip().startswith("#"):
+            cur[last] = (cur[last] + " " + line.strip()).strip()
+    return blocks
+
+
+def parse_tag_batch(text: str) -> tuple[dict[tuple[str, int], str], list[str]]:
+    tags: dict[tuple[str, int], str] = {}
+    errors: list[str] = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*(core|important|backup):(\d+)\s*(?:→|->)\s*(.*)$", line.strip())
+        if not m:
+            continue
+        key = (m.group(1), int(m.group(2)))
+        if key in tags:
+            errors.append(f"DUPLICATE_ROW {key[0]}:{key[1]}")
+        tags[key] = m.group(3).strip()
+    return tags, errors
+
+
+def harvest_tags(run_root: Path, d: int) -> dict[str, str]:
+    """normalized title -> filled tags from existing tag batches of direction d."""
+    out: dict[str, str] = {}
+    for f in sorted(run_root.glob(f"d{d}_b*_tags.md")):
+        text = f.read_text(encoding="utf-8")
+        meta = read_meta(text, TAGS_PREFIX) or {}
+        tags, _ = parse_tag_batch(text)
+        for ref in meta.get("refs", []):
+            value = tags.get((ref.get("tier"), ref.get("row")), "")
+            if value:
+                out[lc.norm_text(ref.get("title", ""))] = value
+    return out
+
+
+def keep_or_archive(path: Path, fresh_meta: dict, prefix: str, same_records, lit_dir: Path) -> bool:
+    """True when an existing batch file still matches; stale files go to _archive/."""
+    if not path.exists():
+        return False
+    text = path.read_text(encoding="utf-8")
+    if read_meta(text, prefix) == fresh_meta and same_records(text):
+        return True
+    dest = lc.archive(path, lit_dir)
+    print(f"NOTICE: stale batch file archived: {path.name} -> {dest}")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# ris mode (review)
+# ---------------------------------------------------------------------------
+
+def plan_ris(lit_dir: Path, plan_file: Path | None, only: list[int] | None, limit: int) -> dict:
+    plan = load_plan(lit_dir, plan_file)
+    skipped = lc.skipped_directions(lit_dir, ("review",))
+    run_dirs = sorted(set(only)) if only else [d for d in plan["directions"] if d not in skipped]
+    unknown = set(run_dirs) - set(plan["directions"])
+    if unknown:
+        raise PlanError(f"UNKNOWN_DIRECTIONS: {sorted(unknown)} not in {plan['source']}")
+    inputs = lc.canonical_inputs(lit_dir)
+    warnings: list[str] = [f"SKIPPED_BY_USER: D{d} (review SKIPPED in lit_status.md)" for d in sorted(skipped) if d not in run_dirs]
+    warnings += [f"SKIPPED_DIRECTION_REQUESTED: D{d} is marked SKIPPED; rerunning it as a repair" for d in sorted(skipped) if d in run_dirs]
+    for p in lc.nonconforming_ris(lit_dir):
+        warnings.append(f"NONCONFORMING_RIS_IGNORED: {p.name} (expected direction{{N}}_{{wos|cnki|openalex}}.ris)")
+    for (d, s), p in inputs.items():
+        if d not in plan["directions"]:
+            warnings.append(f"PLAN_EXTERNAL_INPUT_IGNORED: {p.name} (D{d} not in {plan['source']})")
+    for enw in sorted(lit_dir.glob("*.enw")):
+        d = lc.classify_enw(enw)
+        if d is not None and (d, "cnki") not in inputs:
+            warnings.append(f"CNKI_NOT_CONVERTED: {enw.name} has no direction{d}_cnki.ris (convert in lit-workflow input stage)")
+
+    errors: list[str] = []
+    for d in run_dirs:
+        have = [s for (dd, s) in inputs if dd == d]
+        required = [s for (dd, s), cfg in plan["tracks"].items() if dd == d and cfg["quota"] > 0]
+        if not have:
+            errors.append(f"MISSING_INPUT: D{d} has no direction{d}_*.ris")
+        for s in required:
+            if s not in have:
+                errors.append(f"MISSING_INPUT: D{d} quota needs direction{d}_{s}.ris")
+        for s in have:
+            if s == "openalex" and (d, "wos") not in plan["tracks"]:
+                errors.append(f"NO_QUOTA: D{d} openalex input but no WoS/international quota")
+            if s == "cnki" and (d, "cnki") not in plan["tracks"]:
+                errors.append(f"NO_QUOTA: D{d} cnki input but cnki_quota is 0/absent")
+
+    run_root = lit_dir / REVIEW_DIR
+    sources: list[dict] = []
+    batches: list[dict] = []
+    keys = sorted(((d, s) for (d, s) in inputs if d in run_dirs), key=lambda k: (k[0], SOURCE_ORDER[k[1]]))
+    for d, s in keys:
+        path = inputs[(d, s)]
+        n, errs = lc.check_ris(path)
+        if errs:
+            errors.extend(f"RIS_INVALID: {e}" for e in errs)
+            continue
+        records = lc.split_ris_records(lc.read_text(path))
+        if len(records) != n:
+            errors.append(f"RIS_INVALID: {path.name}: parsed {len(records)} records, TY={n}")
+            continue
+        untitled = [i for i, r in enumerate(records, 1) if not record_title(r)]
+        if untitled:
+            errors.append(f"RIS_TITLE_MISSING: {path.name}: records {untitled[:20]}")
+            continue
+        sources.append({"direction": d, "source_type": s, "source_file": path.name, "record_count": n})
+        for k, start in enumerate(range(1, n + 1, limit), 1):
+            end = min(start + limit - 1, n)
+            bid = f"d{d}_{s}_b{k}"
+            batches.append({
+                "batch_id": bid, "direction": d, "source_type": s, "source_file": path.name,
+                "batch_file": f"{bid}.md", "chunk_file": f"chunks/{bid}.ris",
+                "item_start": start, "item_end": end, "item_count": end - start + 1,
+                "_records": records[start - 1:end],
             })
-            agent_id += 1
-
-    # 重新编号
-    for i, a in enumerate(merged, 1):
-        a["agent_id"] = i
-
-    return merged
-
-
-# ---------------------------------------------------------------------------
-# 校验
-# ---------------------------------------------------------------------------
-
-def verify(items: list[dict], agents: list[dict], limit: int) -> list[str]:
-    """内建校验。"""
-    errors = []
-
-    # 1. 每个 agent 不超过 limit
-    for a in agents:
-        if a["item_count"] > limit:
-            errors.append(f"OVER_LIMIT: Agent#{a['agent_id']} has {a['item_count']} items > {limit}")
-
-    # 2. 总条目数一致（非合并模式）
-    total_items_input = sum(i["item_count"] for i in items)
-    total_items_agents = sum(a["item_count"] for a in agents)
-    if total_items_agents != total_items_input:
-        errors.append(f"COUNT_MISMATCH: input={total_items_input}, agents={total_items_agents}")
-
-    # 3. 每个方向/标签至少 1 个 agent
-    # (对 ris/report 模式检查方向，对 pool 模式检查标签)
-    input_keys = set()
-    agent_keys = set()
-    for i in items:
-        if i["item_count"] > 0:
-            key = i.get("direction") or i.get("tag")
-            if key:
-                input_keys.add(str(key))
-    for a in agents:
-        key = a.get("direction") or a.get("tag", "")
-        for k in str(key).split("+"):
-            agent_keys.add(k)
-    missing = input_keys - agent_keys
-    if missing:
-        errors.append(f"MISSING_COVERAGE: {missing} not assigned to any agent")
-
-    return errors
-
-
-# ---------------------------------------------------------------------------
-# 模板生成（模板填空 + 结构分离）
-# ---------------------------------------------------------------------------
-
-# 模板内容：Agent 只需在下方按格式添加条目，不写任何标题行或元数据。
-# Python 负责结构（section headers、元数据、淘汰摘要）。
-
-TEMPLATE_RIS = """\
-（逐条添加入选文献，严格按以下格式。无入选则只写"无"。不要添加任何 ## 标题行、元数据行或淘汰记录。）
-
-### 入选1
-- 级别: {{核心/重要/备选}}
-- 作者: {{第一作者姓}}
-- 标题: {{完整英文标题}}
-- 年份: {{4位数字}}
-- 期刊: {{从RIS文件原样复制完整期刊名，不要缩写}}
-- 理由: {{中文，含摘要具体信息}}
-"""
-
-TEMPLATE_TAG = """\
-（在每行 → 后填写标签，用+分隔多标签，如 LR+GAP-RQ1。不要修改序号和 → 前的内容。）
-
-{sections}"""
-
-
-def _count_tiers_in_report(report_path: Path) -> dict[str, int]:
-    """从 direction report 中统计每个 tier 的文献行数。"""
-    if not report_path.exists():
-        return {}
-    try:
-        content = report_path.read_text(encoding="utf-8")
-    except Exception:
-        return {}
-
-    tier_counts: dict[str, int] = {}
-    current_tier = None
-
-    for line in content.split("\n"):
-        if re.match(r"^##\s.*核心文献", line):
-            current_tier = "核心文献"
-            tier_counts[current_tier] = 0
-        elif re.match(r"^##\s.*重要文献", line):
-            current_tier = "重要文献"
-            tier_counts[current_tier] = 0
-        elif re.match(r"^##\s.*备选文献", line):
-            current_tier = "备选文献"
-            tier_counts[current_tier] = 0
-        elif re.match(r"^##\s.*淘汰", line):
-            current_tier = None
-        elif current_tier and re.match(r"^\|\s*\d+\s*\|", line):
-            tier_counts[current_tier] = tier_counts.get(current_tier, 0) + 1
-
-    return tier_counts
-
-
-def generate_templates(agents: list[dict], template_dir: str, mode: str):
-    """为每个 agent 生成模板文件。"""
-    tpl_dir = Path(template_dir)
-    tpl_dir.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    skipped = 0
-    if mode == "ris":
-        for a in agents:
-            d = a.get("direction", 0)
-            batch = a.get("batch_seq") or (a["split_info"].split("/")[0] if "/" in a.get("split_info", "") else "1")
-            filename = f"d{d}_batch{batch}_raw.md"
-            filepath = tpl_dir / filename
-            # Safety: skip if file exists and contains agent output (not just template)
-            if filepath.exists():
-                existing = filepath.read_text(encoding="utf-8")
-                if "### 入选" in existing and "- 级别:" in existing:
-                    skipped += 1
-                    continue
-            filepath.write_text(TEMPLATE_RIS, encoding="utf-8")
-            count += 1
-
-    elif mode == "report":
-        # lit-tag: 从 direction report 提取每个 tier 的文献数量，生成带序号的模板
-        # 需要读取 source_file（direction report）解析 tier 结构
-        for a in agents:
-            d = a.get("direction", 0)
-            batch = a["split_info"].split("/")[0] if "/" in a.get("split_info", "") else "1"
-            source = a.get("source_file", "")
-
-            # 尝试从 report 文件读取 tier 结构
-            tier_counts = _count_tiers_in_report(tpl_dir.parent / source) if source else {}
-
-            # 生成模板
-            sections = []
-            for tier_name in ["核心文献（Core）", "重要文献（Important）", "备选文献（Backup）"]:
-                tier_key = tier_name.split("（")[0].strip()  # 核心文献/重要文献/备选文献
-                n = tier_counts.get(tier_key, 0)
-                sections.append(f"## {tier_name}")
-                if n > 0:
-                    for i in range(1, n + 1):
-                        sections.append(f"{i} → ")
-                else:
-                    sections.append("（无）")
-                sections.append("")
-
-            content = "（在每行 → 后填写标签，用+分隔多标签，如 LR+GAP-RQ1。不要修改序号和 → 前的内容。）\n\n"
-            content += "\n".join(sections)
-
-            filename = f"d{d}_tags.md"
-            filepath = tpl_dir / filename
-            # Safety: skip if file exists and contains filled tags (not just template)
-            if filepath.exists():
-                existing = filepath.read_text(encoding="utf-8")
-                if re.search(r"\d+\s*→\s*\S+", existing):
-                    skipped += 1
-                    continue
-            filepath.write_text(content, encoding="utf-8")
-            count += 1
-
-    if skipped:
-        print(f"Templates generated: {count} files, skipped {skipped} (existing agent output) in {tpl_dir}", file=sys.stderr)
-    else:
-        print(f"Templates generated: {count} files in {tpl_dir}", file=sys.stderr)
-
-
-def split_ris_chunks(items_summary: list[dict], agents: list[dict],
-                     input_dir: str, template_dir: str):
-    """Split RIS files into per-agent chunk files under _chunks/."""
-    chunks_dir = Path(template_dir) / "_chunks"
-    chunks_dir.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    errors = []
-    for item in items_summary:
-        d = item["direction"]
-        source_file = item["source_file"]
-        ris_path = Path(input_dir) / source_file
-        content = ris_path.read_text(encoding="utf-8-sig")
-        entries = re.split(r"(?=^TY  - )", content, flags=re.MULTILINE)
-        entries = [e for e in entries if e.strip() and e.strip().startswith("TY  -")]
-
-        # Bug 1 fix: only process agents belonging to THIS source file
-        for a in agents:
-            if a.get("direction") != d or a.get("source_file") != source_file:
-                continue
-            start, end = map(int, a["item_range"].split("-"))
-            chunk = entries[start - 1:end]
-            batch_seq = a.get("batch_seq", a["split_info"].split("/")[0])
-            chunk_path = chunks_dir / f"d{d}_batch{batch_seq}.ris"
-            chunk_path.write_text("\n".join(chunk), encoding="utf-8")
-            count += 1
-
-            # verify chunk entry count
-            actual = sum(1 for line in chunk_path.read_text(encoding="utf-8").split("\n")
-                         if line.startswith("TY  - "))
-            if actual != a["item_count"]:
-                errors.append(f"d{d}_batch{batch_seq}: expected {a['item_count']}, got {actual}")
-
     if errors:
-        print(f"Chunks generated: {count} files (with {len(errors)} ERRORS)", file=sys.stderr)
-        for e in errors:
-            print(f"  ❌ {e}", file=sys.stderr)
-    else:
-        print(f"Chunks generated: {count} files in {chunks_dir}", file=sys.stderr)
+        raise PlanError("\n".join(errors))
 
+    for b in batches:
+        recs = b.pop("_records")
+        chunk_text = "\n\n".join(r.rstrip() for r in recs) + "\n"
+        atomic_write(run_root / b["chunk_file"], chunk_text)
+        meta = {k: b[k] for k in ("batch_id", "direction", "source_type", "source_file", "chunk_file",
+                                  "item_start", "item_end", "item_count")}
+        expected = []
+        lines = [meta_line(BATCH_PREFIX, meta),
+                 f"# D{b['direction']} {b['source_type']} 第{b['batch_id'].rsplit('_b', 1)[1]}批"
+                 f"（记录 {b['item_start']}–{b['item_end']}，共 {b['item_count']} 条；原文见 {b['chunk_file']}）",
+                 "",
+                 "填写说明：只填写每条记录 决定/级别/理由/证据/疑似竞品 冒号后的内容；不得改动 ### 行、标题、有摘要。",
+                 "决定 = include 或 exclude；级别 = 核心/重要/备选（exclude 留空）；理由 = 中文，必填；",
+                 "证据 = 摘要中的一个连续原文短语（无摘要写“仅凭标题”）；疑似竞品 = 仅当与本研究问题/对象/机制高度重叠时写一句中文，否则留空。",
+                 ""]
+        for off, rec in enumerate(recs):
+            ordinal = b["item_start"] + off
+            rid = f"D{b['direction']}-{b['source_type']}-{ordinal}"
+            title = record_title(rec)
+            expected.append((rid, lc.norm_text(title)))
+            lines += [f"### {rid}", f"- 标题: {title}",
+                      f"- 有摘要: {'是' if ris_field(rec, 'AB') else '否'}",
+                      "- 决定: ", "- 级别: ", "- 理由: ", "- 证据: ", "- 疑似竞品: ", ""]
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
+        def same(text: str, expected=expected) -> bool:
+            got = [(blk["record_id"], lc.norm_text(blk.get("标题", ""))) for blk in parse_review_batch(text)]
+            return got == expected
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate SubAgent dispatch plan")
-    parser.add_argument("--mode", required=True, choices=["ris", "report", "pool"],
-                        help="Scan mode")
-    parser.add_argument("--input-dir", default=None,
-                        help="Directory to scan (ris/report modes)")
-    parser.add_argument("--plan-file", default=None,
-                        help="literature_search_plan.md path (ris mode)")
-    parser.add_argument("--pool-json", default=None,
-                        help="pool_prepare.py output JSON (pool mode)")
-    parser.add_argument("--limit", type=int, default=AGENT_ITEM_LIMIT,
-                        help=f"Agent item limit (default: {AGENT_ITEM_LIMIT})")
-    parser.add_argument("--directions", default=None,
-                        help="Comma-separated direction numbers to process (e.g., 1,3,5)")
-    parser.add_argument("--merge-small", action="store_true",
-                        help="Greedy-merge small tasks (pool mode)")
-    parser.add_argument("--output", default=None,
-                        help="Output JSON path")
-    parser.add_argument("--template-dir", default=None,
-                        help="Generate entry-only template files for agents (ris/report modes)")
-    args = parser.parse_args()
+        path = run_root / b["batch_file"]
+        if not keep_or_archive(path, meta, BATCH_PREFIX, same, lit_dir):
+            atomic_write(path, "\n".join(lines) + "\n")
 
-    # 解析方向过滤
-    dir_filter = None
-    if args.directions:
-        dir_filter = [int(x.strip()) for x in args.directions.split(",")]
-
-    # 扫描
-    if args.mode == "ris":
-        if not args.input_dir:
-            print("ERROR: --input-dir required for ris mode", file=sys.stderr)
-            sys.exit(1)
-        items = scan_ris(args.input_dir, args.plan_file, dir_filter)
-    elif args.mode == "report":
-        if not args.input_dir:
-            print("ERROR: --input-dir required for report mode", file=sys.stderr)
-            sys.exit(1)
-        items = scan_reports(args.input_dir, dir_filter)
-    elif args.mode == "pool":
-        if not args.pool_json:
-            print("ERROR: --pool-json required for pool mode", file=sys.stderr)
-            sys.exit(1)
-        items = scan_pool(args.pool_json)
-
-    if not items:
-        print("ERROR: No items found to dispatch", file=sys.stderr)
-        sys.exit(1)
-
-    # 拆分（report 模式不拆分，每方向1个 agent——模板按方向生成，拆分会导致多 agent 写同一文件）
-    if args.mode == "report":
-        effective_limit = max(i["item_count"] for i in items) + 1
-    else:
-        effective_limit = args.limit
-    agents = split_items(items, effective_limit)
-    assign_batch_seq(agents)
-
-    # 贪心合并（仅 pool 模式）
-    if args.merge_small and args.mode == "pool":
-        agents = greedy_merge_small(agents, args.limit)
-        assign_batch_seq(agents)  # re-assign after merge creates new agent dicts
-
-    # 校验（report 模式用 effective_limit，避免误报 OVER_LIMIT）
-    errors = verify(items, agents, effective_limit)
-
-    # 输出 JSON
-    output_path = args.output
-    if not output_path:
-        if args.input_dir:
-            output_path = str(Path(args.input_dir) / "_dispatch_plan.json")
-        elif args.pool_json:
-            output_path = str(Path(args.pool_json).parent / "_dispatch_plan.json")
-        else:
-            output_path = "_dispatch_plan.json"
-
-    output_data = {
-        "mode": args.mode,
-        "agent_item_limit": args.limit,
-        "max_concurrent": MAX_CONCURRENT,
-        "total_items": sum(i["item_count"] for i in items),
-        "total_agents": len(agents),
-        "items_summary": items,
-        "agents": agents,
+    return {
+        "mode": "ris", "created": dt.date.today().isoformat(), "item_limit": limit,
+        "plan_source": plan["source"], "plan_directions": plan["directions"],
+        "directions": run_dirs, "names": {str(d): plan["names"].get(d, f"方向{d}") for d in run_dirs},
+        "sources": sources, "batches": batches,
+        "total_records": sum(s["record_count"] for s in sources), "total_batches": len(batches),
+        "warnings": warnings,
     }
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
 
-    # ===== 生成模板文件（如指定） =====
-    if args.template_dir:
-        generate_templates(agents, args.template_dir, args.mode)
+# ---------------------------------------------------------------------------
+# report mode (tag)
+# ---------------------------------------------------------------------------
 
-    # ===== RIS chunk 拆分（ris 模式 + 有 template-dir 时自动执行） =====
-    if args.mode == "ris" and args.template_dir and args.input_dir:
-        split_ris_chunks(items, agents, args.input_dir, args.template_dir)
+def plan_report(lit_dir: Path, only: list[int] | None, limit: int) -> dict:
+    reports = lc.direction_reports(lit_dir)
+    warnings = [f"NONCONFORMING_REPORT_IGNORED: {p.name} (expected direction{{N}}_report.md)"
+                for p in sorted(lit_dir.glob("direction*_report.md")) if lc.classify_report(p) is None]
+    if not reports:
+        raise PlanError(f"NO_REVIEW_REPORTS: no direction{{N}}_report.md in {lit_dir} (run lit-review first)")
+    skipped = lc.skipped_directions(lit_dir, ("review", "tag"))
+    run_dirs = sorted(set(only)) if only else [d for d in sorted(reports) if d not in skipped]
+    warnings += [f"SKIPPED_BY_USER: D{d} (review/tag SKIPPED in lit_status.md)" for d in sorted(skipped) if d in reports and d not in run_dirs]
+    missing = [d for d in run_dirs if d not in reports]
+    if missing:
+        raise PlanError(f"REPORT_MISSING: {['D%d' % d for d in missing]}")
+    run_root = lit_dir / TAG_DIR
+    report_items, batches = [], []
+    for d in run_dirs:
+        rows = lc.parse_report_rows(lc.read_text(reports[d]))
+        carry = harvest_tags(run_root, d)
+        bad = [r for r in rows if r["ncols"] != 6]
+        if bad:
+            raise PlanError(f"REPORT_TABLE_SCHEMA: {reports[d].name} rows must have 6 columns (review output)")
+        report_items.append({"direction": d, "report_file": reports[d].name, "row_count": len(rows)})
+        for k, start in enumerate(range(0, len(rows), limit), 1):
+            chunk = rows[start:start + limit]
+            bid = f"d{d}_b{k}"
+            refs = [{"tier": r["tier"], "row": r["row"], "title": r["title"]} for r in chunk]
+            meta = {"batch_id": bid, "direction": d, "report_file": reports[d].name, "refs": refs}
+            b = {"batch_id": bid, "direction": d, "report_file": reports[d].name,
+                 "batch_file": f"{bid}_tags.md", "item_count": len(chunk), "refs": refs}
+            lines = [meta_line(TAGS_PREFIX, meta),
+                     f"# D{d} 标签第{k}批（共 {len(chunk)} 篇；来源 {reports[d].name}）", "",
+                     "填写说明：只在每行 → 后填写标签，多个标签用 + 连接；不得改动 tier:row；“>” 行是该文献信息，仅供参考，可保留。", ""]
+            for r in chunk:
+                lines += [f"{r['tier']}:{r['row']} → {carry.get(lc.norm_text(r['title']), '')}".rstrip() + " ",
+                          f"  > {r['author']} ({r['year']}) {r['title']} | {r['journal']} | 入选理由：{r['reason']}", ""]
+            path = run_root / b["batch_file"]
+            if not keep_or_archive(path, meta, TAGS_PREFIX, lambda text: True, lit_dir):
+                atomic_write(path, "\n".join(lines) + "\n")
+            batches.append(b)
+    return {
+        "mode": "report", "created": dt.date.today().isoformat(), "item_limit": limit,
+        "directions": run_dirs, "reports": report_items, "batches": batches,
+        "total_rows": sum(r["row_count"] for r in report_items), "total_batches": len(batches),
+        "warnings": warnings,
+    }
 
-    # ===== stdout 结构化摘要 =====
-    print(f"=== DISPATCH PLAN ({args.mode.upper()}) ===")
-    print(f"Items scanned: {len(items)}")
-    print(f"Total entries: {sum(i['item_count'] for i in items)}")
-    print(f"Agent limit: {args.limit}")
-    print(f"Total agents: {len(agents)}")
-    print(f"Max concurrent: {MAX_CONCURRENT}")
-    if args.mode == "report":
-        print(f"(report mode: --limit {args.limit} is ignored; each direction = 1 agent by design)")
-    print()
 
-    # 输入摘要
-    print("Input summary:")
-    for item in items:
-        label = f"D{item['direction']}" if "direction" in item else item.get("tag", "?")
-        extra = f" (quota: {item['quota']})" if item.get("quota") else ""
-        print(f"  {label}: {item['item_count']} items{extra}")
-    print()
-
-    # 调度表
-    if args.mode in ("ris", "report"):
-        print("| Agent# | 方向 | 条目范围 | 条目数 | 拆分 |")
-        print("|:------:|:-----|:---------|:------:|:----:|")
-        for a in agents:
-            print(f"| {a['agent_id']} | D{a.get('direction', '?')} | {a.get('item_range', '-')} | {a['item_count']} | {a['split_info']} |")
-    else:
-        print("| Agent# | 标签 | 条目数 | 拆分 |")
-        print("|:------:|:-----|:------:|:----:|")
-        for a in agents:
-            print(f"| {a['agent_id']} | {a.get('tag', '?')} | {a['item_count']} | {a['split_info']} |")
-    print()
-
-    # 校验结果
-    if errors:
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--mode", required=True, choices=["ris", "report"])
+    ap.add_argument("--lit-dir", "--input-dir", dest="lit_dir", required=True,
+                    help="structure/2_literature")
+    ap.add_argument("--plan-file", help="default: <lit-dir>/literature_search_plan.md")
+    ap.add_argument("--directions", help="comma list, e.g. 1,3 (default: all)")
+    ap.add_argument("--limit", type=int, default=ITEM_LIMIT)
+    args = ap.parse_args()
+    if not 1 <= args.limit <= ITEM_LIMIT:
+        ap.error(f"--limit must be 1..{ITEM_LIMIT}")
+    lit_dir = Path(args.lit_dir)
+    only = [int(x) for x in re.split(r"[,\s]+", args.directions.strip()) if x] if args.directions else None
+    try:
+        if args.mode == "ris":
+            data = plan_ris(lit_dir, Path(args.plan_file) if args.plan_file else None, only, args.limit)
+            out = lit_dir / REVIEW_DIR / "dispatch_plan.json"
+        else:
+            data = plan_report(lit_dir, only, args.limit)
+            out = lit_dir / TAG_DIR / "dispatch_plan.json"
+        atomic_write(out, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    except (PlanError, OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         print("=== VERIFY: FAIL ===")
-        for e in errors:
-            print(f"  ❌ {e}")
-        sys.exit(1)
-    else:
-        print("=== VERIFY: PASS ===")
-        print(f"Output: {output_path}")
+        raise SystemExit(1)
+    for w in data["warnings"]:
+        print(f"⚠️ {w}")
+    print(f"=== DISPATCH PLAN ({args.mode}) ===")
+    print(f"Directions: {', '.join('D%d' % d for d in data['directions'])}")
+    print("| # | batch | 方向 | 来源 | 条目 |")
+    print("|--:|:------|:----:|:-----|----:|")
+    for i, b in enumerate(data["batches"], 1):
+        src = b.get("source_type") or b.get("report_file")
+        rng = f"{b['item_start']}-{b['item_end']}" if "item_start" in b else str(b["item_count"])
+        print(f"| {i} | {b['batch_id']} | D{b['direction']} | {src} | {rng} |")
+    print(f"Total batches: {data['total_batches']}")
+    print("=== VERIFY: PASS ===")
+    print(f"Output: {out}")
 
 
 if __name__ == "__main__":

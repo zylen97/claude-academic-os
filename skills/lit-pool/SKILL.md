@@ -1,609 +1,115 @@
 ---
-description: "从direction reports生成按标签汇总的引用池（Citation Pool），含引用场景、分级排序和引用偏好，生成 master.bib，并同步到 Zotero 项目集合"
+name: lit-pool
+description: 文献 pool 阶段：从 tagged_reports/ 按唯一论文去重、生成 citation key，派 worker（主模型）写引用场景，组装 citation_pool/{BG,LR,GAP,METHOD,DISC,COMP}.md 与 master.bib，生成并填写 master_report.md、method_landscape.md，最后校验并写出 literature_manifest.json（下游唯一语料表）。通常由 lit-workflow 调用；单独使用时用于池的修复或刷新。
+argument-hint: "[--source-pool（学位论文有源项目时）]"
 ---
 
-# Lit-Pool — 引用池生成
+# lit-pool — 引用池与语料表
 
-从 `/lit-review` 产出的 direction reports 中提取所有入选文献，按功能标签汇总，生成 `citation_pool/` 目录（含 BG.md/LR.md/GAP.md/METHOD.md/DISC.md/COMP.md），为各章节写作提供结构化的引用指南。
+规格：`~/.claude/skills/shared/ACADEMIC-OS-LITE.md` §3（冲突时以规格为准）。常规入口是 `/lit-workflow`；本技能也是 pool 阶段的定点修复入口。
 
-**输入**：无参数，直接运行 `/lit-pool`
+- 输入：`tagged_reports/`、`tag_report.md`（lit-tag 产物）、canonical RIS（生成 bib 用）、`structure/0_global/idea.md`。不读 review 报告之外的中间文件。
+- 产物：`citation_pool/{BG,LR,GAP,METHOD,DISC,COMP}.md`、`citation_pool/master.bib`、`master_report.md`、`method_landscape.md`（或 `method_landscape_refresh.md`）、`literature_manifest.json`（每篇唯一论文一行，最后写出）。
+- 运行目录 `_pool_runs/`（`pool_prepare.json`、worker 模板与格式化结果）。
+- 不写任何技术章节 md；不自动 commit；被替换的已有产物（池文件、master.bib、master_report.md）自动移入 `_archive/{日期}/`。
 
-**前置条件**：`/lit-review` + `/lit-tag` 已完成（direction reports中必须含"功能标签"列）
+下文 `$L` 指 `structure/2_literature`，命令在论文仓库根目录执行。
 
----
-
-## 全局约束
-
-### ⛔ Fail-Fast 规则（最高优先级）
-本 skill 中任何步骤出现以下情况，**必须立即停止整个流程并向用户汇报**，不得自行修复、跳过或继续：
-- Python 脚本输出 `VERIFY: FAIL`
-- 引用池文件数 ≠ 标签类别数
-- `master.bib` 条目数与入选文献数不一致
-- 任何脚本报错退出（exit code ≠ 0）
-
-**汇报格式**：原样粘贴脚本 stderr/stdout 错误信息 + 说明出错步骤 + 等待用户指示。
-
-### 模型选择
-**subAgent 使用 Opus 模型**（不传 `model` 参数，继承主 Agent）。引用场景生成是写作任务，质量直接传导到下游 /narrative 和 /technical 写作，需要 Opus 的理解深度。
-
-### 输出语言
-**所有描述性文本必须使用中文**，包括但不限于：引用场景、与本研究的关键差异、标签文件header/备注。文献的标题、期刊名、作者名保持原文（通常为英文）。
-
-### SubAgent负载上限
-**AGENT_ITEM_LIMIT = 30**
-
-单个subAgent处理的文献条目数不得超过30篇。超过时必须拆分。
-
-### 槽位制并发控制
-**MAX_CONCURRENT_AGENTS = 8**
-
-同时运行的 subAgent 数**不超过 8 个**，每当 1 个 subAgent 完成（或失败重试后仍失败），立即从队列中取下一个启动，直到所有 subAgent 处理完毕。不等整批完成再启动下一批。
-
-失败重试：subAgent 失败 → 自动重试一次 → 仍失败则报告用户。
-
----
-
-## 步骤 0：前置检查
-
-- 读取 `CLAUDE.md` → 提取项目编号
-- 读取 `structure/0_global/idea.md` → 提取研究上下文（RQ、方法论，用于生成引用场景）
-- Glob `structure/2_literature/direction*_report.md` → 确认存在
-  - 不存在 → 停止，提示先运行 `/lit-review`
-- 检查 `structure/2_literature/citation_pool/` 目录是否已存在
-  - 已存在 → 询问用户：覆盖还是跳过？
-- **源项目检测**（仅学位论文项目）：检查 CLAUDE.md 是否包含 `源项目` 字段
-  - 如包含 → 提取源项目路径，定位 bib 文件和 manuscript.tex
-  - 如找到 → 设置 `HAS_SOURCE_PROJECT=true`，进入步骤 0.5
-  - 如未找到 → 按普通项目继续
-
----
-
-## 步骤 0.5：源项目文献提取（仅限有源项目的学位论文项目）
-
-当 CLAUDE.md 声明了源项目时，运行源项目文献提取脚本，将源项目的已有引用整合到引用池。
-
-### 0.5.1 调用源项目提取脚本
+## 步骤 0：入口检查
 
 ```bash
-python3 ~/.claude/skills/lit-pool/source_bib_to_pool.py \
-  --source-bib <源项目bib路径> \
-  --source-tex <源项目manuscript.tex路径> \
-  --output structure/2_literature/_source_pool.json \
-  --rq-count {RQ数量，默认2}
+python3 ~/.claude/skills/lit-workflow/lit_status.py --project-root . --check pool
 ```
 
-**脚本职责**（`source_bib_to_pool.py`）：
-1. 解析源项目 bib 文件所有条目
-2. 解析源项目 manuscript.tex，提取每个 section/subsection 中的 `\cite{}`/`\citep{}`/`\citet{}` 引用
-3. 按 section→标签映射规则分配功能标签：Introduction→BG+LR, Literature Review→LR, Methods→METHOD, Results/Discussion→DISC-RQx
-4. 为每篇文献生成新 citation key（`auth.lower + year + shorttitle(1,1)` 格式）
-5. 按引用频率推断分级（3+个section=core, 2个=important, 1个=backup）
-6. 输出 `_source_pool.json`
-
-**manuscript 版本选择**：优先用 `manuscript.tex`（通常是最新版），如不存在则按 R 编号倒序查找 `manuscript-R*.tex`。
-
-### 0.5.2 主 Agent 校验
-
-VERIFY 必须为 PASS。展示：
-- 源项目 bib 总条目数 vs 被引用条目数
-- 标签分布
-- Citation key 映射样本（source_key → new_key）
-
----
-
-## 步骤 1：提取 + 去重 + Citation Key + 调度计划（Python 脚本）
-
-**本步骤由 Python 脚本一次性完成**，替代主 Agent 手动读报告、去重、生成 key、拆分 agent。
-
-### 1.1 调用预处理脚本
+退出码非 0 → 停止并报告（典型：某方向 review/tag 为 FAILED 且未经用户确认跳过、某方向缺带标签副本）。被标 SKIPPED（其后无 CLEARED）的方向由各脚本自动排除。学位论文且项目合同声明了源项目时，先运行：
 
 ```bash
-python3 ~/.claude/skills/lit-pool/pool_prepare.py \
-  --report-dir structure/2_literature/ \
-  --output-dir structure/2_literature/ \
-  --agent-limit 30 \
-  ${SOURCE_POOL_FLAG}
-# SOURCE_POOL_FLAG: 有源项目时为 --source-pool structure/2_literature/_source_pool.json；否则省略
+python3 ~/.claude/skills/lit-pool/source_bib_to_pool.py --source-bib <源项目.bib> --source-tex <源项目 manuscript.tex> \
+  --output $L/_pool_runs/source_pool.json --rq-count <n>
 ```
 
-> **源项目整合**：当 `--source-pool` 传入时，脚本将源项目文献与方向报告文献合并去重。源项目文献的标签来自 manuscript 章节分析，分级来自引用频率推断。重复文献（源项目+新检索均含）保留方向报告的分级和理由，但合并两侧标签。
-
-**脚本职责**（`pool_prepare.py`）：
-1. 解析所有 `direction*_report.md` 的 markdown 表格，提取文献数据
-2. 跨方向去重（key = first_author + year + title[:40]），合并标签和分级
-3. 按全局规则生成 citation key（`auth.lower + year + shorttitle(1,1)`），自动处理冲突（追加 b/c 后缀）
-4. 按标签分组，统计每标签文献量
-5. 大标签按 ⌈N/30⌉ 拆分，小标签（≤15篇）贪心合并
-6. 校验：key 格式合规、全局唯一、每篇至少 1 标签、agent 分配完整
-7. 生成 `_pool_prepare.json`（含：去重后文献清单、citation key 映射表、标签分组、agent 调度计划）
-8. stdout 输出摘要 + `VERIFY: PASS|FAIL`
-
-### 1.2 主 Agent 校验
-
-```
-=== VERIFY: PASS|FAIL ===
-```
-
-- VERIFY 必须为 PASS。FAIL 时停止，展示具体错误给用户
-- 将 stdout 的标签统计、key 样本、agent 调度表展示给用户确认
-- 后续步骤从 `_pool_prepare.json` 读取数据构建 subAgent prompt
-
-### 1.3 Citation key 使用规则
-
-subAgent 必须**原样使用** `_pool_prepare.json` 中的 citation key，**严禁**自行生成、修改或追加任何后缀。主 Agent 在收到 subAgent 输出后，检查 key 是否一致。
-
----
-
-## 步骤 2：读取调度计划
-
-从 `_pool_prepare.json` 的 `agents` 字段读取调度信息。拆分和贪心合并已由 Python 脚本完成，主 Agent **不做任何算术**。
-
-基于步骤 1 的调度计划，严格按 **AGENT_ITEM_LIMIT = 30** 分配subAgent任务。
-
-### 2.1 展示调度计划
-
-将 `_pool_prepare.json` 中的 `agents` 调度表展示给用户确认。
-所有拆分和贪心合并已由 Python 脚本完成，主 Agent 直接读取使用。
-
----
-
-## 步骤 3：并行启动SubAgent
-
-按**槽位制**启动所有 subAgent（同时不超过 8 个，完成一个补一个）。
-
-### Agent 调用协议（强制）
-
-每个 subAgent 必须使用：
-- **`subagent_type: general-purpose`**（必须——本步骤的 subAgent 需要 Write 工具覆写 `_tmp_pool_agent{N}_raw.md`；Explore agent 无 Write 工具，误选会导致全线失败）
-- `model: opus`
-- 不传 `isolation` 参数（全局红线：禁止 worktree）
-- 所需工具：Read + Write（读模板 + 写结果文件）
-
-### 每个SubAgent的Prompt模板
-
-```
-你是学术文献分析专家。请对以下文献生成引用场景和排序。
-
-## 研究上下文
-{RESEARCH_CONTEXT}（来自步骤0加载的idea.md摘要）
-
-## 你的任务
-处理以下标签的文献：{标签列表}
-文献数量：{N}篇
-
-## 文献清单
-{主Agent传入的文献列表，含：作者、年份、标题、期刊、功能标签、分级、入选理由}
-
-## 对每篇文献执行：
-1. **使用 citation key**：必须**原样复制**主Agent传入的 citation key，不可自行生成、修改或追加任何后缀。正确示例：`akcomak2023w`。错误示例：`akcomak2023w2023a`（多了重复的年份+字母）
-2. **排序**：每个标签组内，按分级（核心→重要→备选）+ 年份降序
-3. **生成引用场景**：基于入选理由 + 研究上下文，改写为写作视角
-   - 入选理由 = "为什么留下这篇"（筛选视角）
-   - 引用场景 = "这篇可以支撑什么论点"（写作视角）
-4. **中文文献处理**：文献可能为中文（来自CNKI数据库）。引用场景仍用中文撰写。citation key 必须原样复制，不可修改
-
-## 输出格式（模板填空 + 结构分离）
-
-> **设计原理**：Agent 只输出条目级内容（照模板格式填空），不写任何 `#` section headers。Python 脚本 `format_pool_agents.py` 按「标签」字段分组，确定性生成标准表格。
-
-**步骤**：
-1. 先读取模板文件：`structure/2_literature/_tmp_pool_agent{N}_raw.md`
-2. 用 Write 工具**覆写**该文件，按模板中的格式逐条添加文献
-
-**关键规则**：
-- **不要添加任何 `#` 标题行**——标签分组由 Python 生成
-- 每篇文献用 `### paperN` 开头，后跟 **7 行** `- key: value`
-- **必须包含 `- 标签:` 字段**——**只写当前 agent 被分配处理的那一个标签**（如 BG / GAP-RQ1 / METHOD-先例），不要写该文献的所有标签。这是 Python 分组的唯一依据。写多个标签（如 `DISC-RQ3, COMP, LR`）会被 `format_pool_agents.py` 检测为违规并 WARN；在 `pool_merge.py` 阶段同一行会被拆分复制到多个池文件（已做 citation_key 去重保护，但仍浪费 agent 产出且掩盖违规，务必避免）
-- citation key 必须**原样复制**，不可修改
-- 分级写中文：核心/重要/备选
-- 引用场景用中文，文献信息保持英文
-- 期刊名使用完整名称，不要缩写
-- **字段名必须严格使用标准命名**：`- 标签:` / `- citation_key:` / `- 分级:` / `- 作者:` / `- 年份:` / `- 引用场景:` / `- 期刊:`。不接受 `引用键`、`Citation Key`、`文献`、`核心观点`、`偏好`、`期刊/年份` 等自造字段名——`format_pool_agents.py` 解析不到标准字段时会 FAIL 并要求重发 agent
-
-**输出示例**：
-
-```markdown
-### paper1
-- 标签: BG
-- citation_key: smith2024b
-- 分级: 核心
-- 作者: Smith et al.
-- 年份: 2024
-- 引用场景: 中文引用场景描述
-- 期刊: JOURNAL OF CONSTRUCTION ENGINEERING AND MANAGEMENT
-
-### paper2
-- 标签: GAP-RQ1
-- citation_key: lee2023s
-- 分级: 重要
-- 作者: Lee et al.
-- 年份: 2023
-- 引用场景: 中文引用场景描述
-- 期刊: RESEARCH POLICY
-```
-```
-
----
-
-## 步骤 3.5：格式标准化（Python 脚本）
-
-将 Agent 输出的 key-value 块（`*_raw.md`）转换为 `pool_merge.py` 所需的标准表格格式。
+## 步骤 1：准备
 
 ```bash
-python3 ~/.claude/skills/lit-pool/format_pool_agents.py \
-  --input-dir structure/2_literature/ \
-  --prepare-json structure/2_literature/_pool_prepare.json
+python3 ~/.claude/skills/lit-pool/pool_prepare.py --lit-dir $L [--source-pool $L/_pool_runs/source_pool.json]
 ```
 
-**脚本职责**（`format_pool_agents.py`）：
-1. 读取所有 `_tmp_pool_agent*_raw.md` 文件
-2. 解析 key-value 块（citation_key/分级/作者/年份/引用场景/期刊）
-3. 转换为标准 6 列 markdown 表格
-4. 校验 citation key 存在于 `_pool_prepare.json` 中
-5. 输出标准化的 `_tmp_pool_agent*.md`（去掉 `_raw` 后缀）
-6. stdout 输出 `VERIFY: PASS|FAIL`
+- 阻断：缺 `tag_report.md`；`tagged_reports/` 与 review 报告不一一对应或有行不一致（回到 lit-tag 重跑该方向）；非法标签；占位作者；citation key 格式错误或重复。
+- 唯一论文口径与 review/tag 相同（DOI / WoS UT / 第一作者+年份+标题前80字符）；重复出现的合并标签、理由与来源方向，保留最高级别。
+- citation key：`姓氏小写 + 年份 + 标题首个实词首字母`（中文姓转拼音），冲突追加 b/c…；**已有 `literature_manifest.json` 时，同一篇论文沿用原 key**（刷新语料不会让正文已引用的 key 变化）。
+- 写出 `_pool_runs/pool_prepare.json` 与预填模板 `_pool_runs/pool_agent{N}_raw.md`（每个 ≤30 个“标签 × 文献”条目，书目信息已预填）。分配不变时已填模板保留；分配变化时旧模板归档，相同“标签 × key”的引用场景自动沿用。
 
-**主 Agent 校验**：VERIFY 必须为 PASS。
+## 步骤 2：子任务（worker，主模型）
 
----
+- 先查哪些模板待填：`python3 ~/.claude/skills/lit-pool/format_pool_agents.py --lit-dir $L --check --json`。
+- 每个 `EMPTY` / `INVALID` / `MISSING` 模板一个 worker：Agent 工具，`subagent_type: "lit-pool-worker"`（`~/.claude/agents/lit-pool-worker.md`，不指定 model 即继承主模型，只写分配的模板）。滚动并发 ≤ 8，不传 isolation。
+- prompt 给：`{RESEARCH_CONTEXT}`（≤800 字，含 RQ、方法、贡献意图）与模板路径。写法规则在 worker 定义中。
+- 失败语义：停止派发 → 等在途完成 → 重试一次 → 仍失败则停止本阶段并报告（不合并部分结果）。
 
-## 步骤 4：合并组装 `citation_pool/` 目录（Python 脚本）
-
-所有 subAgent 完成后，**由 Python 脚本自动合并**，替代主 Agent 的 bash 拼接。
-
-### 4.1 调用合并脚本
+## 步骤 3：格式化与组装
 
 ```bash
-python3 ~/.claude/skills/lit-pool/pool_merge.py \
-  --tmp-dir structure/2_literature/ \
-  --output-dir structure/2_literature/citation_pool/ \
-  --prepare-json structure/2_literature/_pool_prepare.json \
-  --clean-tmp
+python3 ~/.claude/skills/lit-pool/format_pool_agents.py --lit-dir $L     # 每个条目恰好一次且引用场景非空
+python3 ~/.claude/skills/lit-pool/pool_merge.py --lit-dir $L            # 写 6 个池文件
 ```
 
-**脚本职责**（`pool_merge.py`）：
-1. 解析所有 `_tmp_pool_agent*.md` 临时文件
-2. 按标签自动识别表格行，分组到对应文件
-3. 组装 BG.md / LR.md / GAP.md / METHOD.md / DISC.md / COMP.md
-4. 自动生成标准 header（篇数、日期、服务章节、引用偏好）
-5. GAP/DISC 按 RQ 分子 section，METHOD 按基础/先例分子 section
-6. 清理临时文件
-7. 与 `_pool_prepare.json` 交叉校验标签覆盖
-8. stdout 输出摘要 + `VERIFY: PASS|FAIL`
+六个池文件总是全部生成；COMP 或 METHOD 为空是需要报告的风险，不是错误。
 
-### 4.2 主 Agent 校验
-
-VERIFY 必须为 PASS。将输出文件列表和行数展示给用户。
-
----
-
-## 步骤 5：更新各章节md的引用池（Python 脚本）
-
-**由 Python 脚本自动完成**，替代主 Agent 逐文件手动编辑。
+## 步骤 4：master.bib
 
 ```bash
-# 先预览
-python3 ~/.claude/skills/lit-pool/update_citation_refs.py \
-  --structure-dir structure/ \
-  --pool-dir structure/2_literature/citation_pool/ \
-  --dry-run
-
-# 确认后正式执行
-python3 ~/.claude/skills/lit-pool/update_citation_refs.py \
-  --structure-dir structure/ \
-  --pool-dir structure/2_literature/citation_pool/
+python3 ~/.claude/skills/lit-pool/ris2bib.py --lit-dir $L [--extra-bib <源项目.bib>]
 ```
 
-**脚本职责**（`update_citation_refs.py`）：
+逐篇匹配 RIS：先用 review 记录的原始记录，再按 DOI，再按年份 + 第一作者；任何候选都必须通过标题高相似度检查。任一篇匹配失败 → 阻断，不写 TODO 占位条目（修 RIS 或回到 review）。
 
-引用池消费方按章节类型分两类——技术型章节（X.md 是唯一权威源，由 /method-audit + /technical 接力）需要在 md 中插入引用池区块；叙述型章节（无 md 中间产物，由 /narrative 直接读 citation_pool/ 写 tex）不需要 md 区块插入，只需保证 citation_pool 目录下对应标签文件齐备。
-
-| 章节 | 类型 | 标签消费规则 | md 区块插入 |
-|:---|:---|:---|:---:|
-| Methodology（X.md：methodology.md） | 技术型 | METHOD[主] | ✓ |
-| Results（X.md：results.md） | 技术型 | METHOD[次基础] | ✓ |
-| Simulation（X.md：simulation.md，仅 modeling） | 技术型 | BG[次] + LR[次] | ✓ |
-| Introduction（manuscript.tex \section{Introduction}） | 叙述型 | BG[主] + GAP[主] + LR[次] | — |
-| Literature Review（manuscript.tex \section{Literature review}） | 叙述型 | LR[主] + GAP[主] + METHOD[次] + DISC[次] | — |
-| Discussion（manuscript.tex \section{Discussion}） | 叙述型 | DISC[主] + COMP[主] + LR[次] | — |
-
-脚本自动查找技术型 X.md 文件、插入/更新引用池区块、校验引用池文件存在性。叙述型章节的 citation 由 `/narrative` 在交互中按上表标签优先级消费。
-
-> **契约提示**：本表是 `update_citation_refs.py` 脚本的硬编码标签消费规则的**事实标准**。修改本表（增删行 / 调整 [主]/[次] 优先级 / 改变标签集合）必须**同步修改脚本内部的 `CHAPTER_POOL_MAP` 字典**（脚本中也提供 `LABEL_MAP` 别名指向同一字典，两个名字均可），否则会出现脚本与文档不一致。
->
-> 关键约束：脚本只为**技术型章节**（methodology / results / simulation）插入 `## 引用池` 区块。**叙述型章节**（introduction / literature / discussion）按本表 "—" 标记，**不在脚本配置中**——由 /narrative 在交互中按表格优先级直接读 citation_pool/。修改时必须保持这一边界（叙述型不应进入 `CHAPTER_POOL_MAP`）。
-
-脚本 stdout 输出 `VERIFY: PASS|FAIL`（仅显示 methodology/results/simulation 三个 chapter 的处理结果；panel-regression / survey-sem 项目无 simulation → 显示 ⏭️ skipped 不视为错误）。
-
----
-
-## 步骤 6：对话汇报
-
-在对话中展示：
-1. 各标签文献数量分布表
-2. 核心/重要/备选的总体比例
-3. `citation_pool/` 目录路径
-4. 提醒用户审阅，确认引用场景是否准确
-5. 提示：正在生成完整评估报告（master_report.md）...
-
----
-
-## 步骤 7：生成总报告 master_report.md（两步法）
-
-**设计原理**：master_report 80% 是数据搬运（竞品表、方法先例表、标签统计），20% 是判断（Gap 真实性、可行性结论）。用 Python 处理前者，主 Agent 直接填写后者——不开 subAgent，因为主 Agent 已有完整上下文。
-
-### 7.1 Python 生成报告骨架
+## 步骤 5：master_report.md
 
 ```bash
-python3 ~/.claude/skills/lit-pool/generate_master_report.py \
-  --pool-dir structure/2_literature/citation_pool/ \
-  --data-dir structure/2_literature/ \
-  --idea-file structure/0_global/idea.md \
-  --output structure/2_literature/master_report.md
+python3 ~/.claude/skills/lit-pool/generate_master_report.py --lit-dir $L --idea-file structure/0_global/idea.md
 ```
 
-**脚本职责**（`generate_master_report.py`）：
-1. 从 `screening_summary_report.md` 提取检索总量（加总各方向检索数）
-2. 从 `direction*_report.md` 提取各方向分级分布 + 跨方向去重后的全局分级计数
-3. 从 `citation_pool/COMP.md` 提取竞品表格（截断120字 + 注明"详见COMP.md"）
-4. 从 `citation_pool/METHOD.md` 提取方法论先例表格（核心+重要，上限20篇）
-5. 从 `tag_report.md` 提取标签充足性数据 + 自动标出达标率最低的标签
-6. 从 `citation_pool/BG.md` 提取近年文献列表，作为紧迫性填写的参考素材
-7. 生成 `master_report.md`，判断性内容留 `<!-- JUDGE: ... -->` 占位符
-8. 文献分布表分两行展示：各方向小计（含重复）+ 去重后独立文献数
-9. stdout 输出统计 + `VERIFY: PASS|FAIL`（含数学校验：tier sum == total_dedup）
+输出 `DATA PASS — JUDGMENT PENDING`。主 agent（不开 worker）逐个填写全部 `<!-- JUDGE … -->`：
 
-> **数据源约束**：脚本只依赖永久文件（direction reports / tag_report.md / screening_summary / citation_pool/），不依赖任何 `_*.json` 中间文件。清理顺序不影响结果。
+- 竞品：依据 COMP 池与 `screening_summary_report.md` 的疑似竞品汇总；COMP = 0 写“当前语料未发现直接竞品”并说明残余检索风险，不得声称不存在竞品。
+- Gap：逐条给出 ✅真实 / ⚠️需关注 / ❌已被填补 + 文献支撑（citation key）+ 理由。
+- 方法论：核心/重要级 METHOD = 0 时写明方法论证风险与可能的补检。
+- 补检建议：只能经 lit-workflow（OpenAlex → `openalex_to_ris.py` → 从 review 重跑）回流，不得把池外文献直接写进池或正文。
+- 已存在的 master_report.md 被归档到 `_archive/`；其中仍成立的判断可以搬回。
 
-### 7.2 主 Agent 填写判断（不开 subAgent）
+完成后 `grep -c JUDGE $L/master_report.md` 必须为 0。
 
-主 Agent 读取 `master_report.md`，基于当前对话上下文（已跑完 lit-review/lit-tag/lit-pool 全流程），直接用 Edit 工具替换每个 `<!-- JUDGE: ... -->` 占位符：
+## 步骤 6：method_landscape.md
 
-| 判断项 | 填写内容 | 质量要求 |
-|:-------|:---------|:---------|
-| 竞品判断 | 直接竞品有/无、差异化空间、间接竞品、结论 | 列出具体论文和差异点 |
-| Gap 验证 | 每个 Gap: ✅/⚠️/❌ + 文献支撑 + 理由 | 每个 Gap 至少引用 2 篇文献作为证据 |
-| 方法论结论 | 有充分先例/有部分先例/首次应用 | 引用 METHOD 表格中的具体数字 |
-| 紧迫性 | 高/中/低 + 行业证据 + 趋势 | **至少引用 2-3 篇 BG 文献**（骨架已提供参考列表）；列出具体政策文件名或行业事件 |
-| 补检建议 | 基于标签缺口给具体建议 | **即使全达标，也检查**：(1)达标率最低的标签 (2)某个RQ的DISC是否偏少 (3)是否有论点缺乏支撑。如确实无需补检，说明理由 |
-| 综合评估 | 可行性 + 核心发现 + 设计建议 | 核心发现 3-5 条；设计建议 2-3 条 |
+- 若 `$L/method_landscape.md` 首行含 `<!-- curated -->`（idea-refine 或 analysis 人工整理过）：**不覆盖**，把本次文献视角写到 `$L/method_landscape_refresh.md`。
+- 否则写（或重写）`$L/method_landscape.md`。主 agent 综合 `citation_pool/METHOD.md`、idea.md 的方法部分与相关方向的带标签报告，结构：
+  1. 建模策略综述；2. 变量选取共性与差异；3. 数据与样本通行做法；4. 方法创新空间（结合本研究情境）；5. 与本研究方法设计的逐条对照。
+  每节引用具体 citation key；中文 1000–2000 字；CNKI 文献注明“（国内学者）”。
 
-### 7.3 质量校验
-
-主 Agent 完成判断填写后，**必须**执行以下校验：
-
-1. **占位符清零**：`grep -c 'JUDGE' master_report.md` 必须为 0（所有占位符已替换）
-2. **表格完整性**：竞品表行数 > 0、方法论先例表行数 > 0、标签充足性表有 5 行数据
-3. **判断一致性**：Gap 评估结论与 lit-review 步骤 3 的初步判断一致（如有不一致，说明原因）
-
-校验通过后在对话中展示：
-1. 可行性结论
-2. 竞品预警（如有）
-3. Gap 真实性评估
-4. 引用池充足性（按标签）
-5. 补检建议（如有）
-6. **下一步建议**：用户审阅 master_report.md + method_landscape.md → 运行 `/idea-refine` 迭代优化 idea → 进入步骤④ 技术章节开发
-
----
-
-## 步骤 7.5：生成方法论综述报告 method_landscape.md（**文献视角初版**）
-
-**设计原理**：从 `citation_pool/METHOD.md` 的结构化引用数据中，综合文献方向报告和 idea.md 的方法设计，生成一份面向技术章节开发的方法论地图。该报告是 `/idea-refine` 和技术章节开发的关键输入。
-
-> **生命周期**：本步骤产出的是**文献视角初版**。后续 `/method-audit` 步骤 2.5.1 会**覆盖**此文件为 benchmark 对标视角（二者共用路径 `structure/2_literature/method_landscape.md`，不并存）。lit-pool → method-audit 之间运行 `/idea-refine` 时读到的是此文献视角初版，method-audit 完成后下游（finalize）读到的是 benchmark 视角终版。
-
-### 7.5.1 主 Agent 综合写作（不开 subAgent）
-
-主 Agent 读取以下文件：
-1. `structure/2_literature/citation_pool/METHOD.md`（METHOD-基础 + METHOD-先例）
-2. `structure/0_global/idea.md`（§3 方法论选择论证）
-3. `structure/2_literature/direction*_report.md`（方法相关方向的完整报告）
-
-写入 `structure/2_literature/method_landscape.md`，结构如下：
-
-```markdown
-# 方法论综述报告
-
-> **生成日期**: {YYYY-MM-DD}
-> **数据来源**: citation_pool/METHOD.md ({N}篇) + direction reports
-> **定位**: 为技术章节开发和 /idea-refine 提供方法论基础
-
-## 1. 建模策略综述
-{综述相关研究采用的建模方法、模型类型、求解策略，按频率/主流程度排列}
-
-## 2. 变量选取共性与差异
-{核心变量、控制变量、调节/中介变量的通行做法，标注本研究的选取与主流的异同}
-
-## 3. 数据与样本通行做法
-{数据来源、样本规模、采样策略的行业惯例}
-
-## 4. 方法创新空间
-{哪些方法路径已被充分探索（做烂了），哪些还有创新机会，结合本研究情境的具体建议}
-
-## 5. 与本研究方法设计的对照
-{逐条对比 idea.md §3 的方法选择与文献中的主流做法，标出差异点和可借鉴点}
-```
-
-### 7.5.2 质量要求
-
-- 每个章节必须引用具体文献（citation key），不得泛泛而谈
-- §4 创新空间必须结合本研究的具体情境，不是通用建议
-- §5 对照必须逐条对应 idea.md §3 的内容
-- 总字数 1000-2000 字（中文）
-- 如包含中文文献（CNKI来源），在引用时注明"（国内学者）"以区分国内外研究脉络
-
----
-
-## 步骤 8：生成 master.bib（Python 脚本）
-
-**由 Python 脚本自动完成 RIS → BibTeX 转换**，替代主 Agent 手动格式转换。
-
-### 8.1 调用转换脚本
+## 步骤 7：收尾校验，写出语料表
 
 ```bash
-python3 ~/.claude/skills/lit-pool/ris2bib.py \
-  --ris-dir structure/2_literature/ \
-  --prepare-json structure/2_literature/_pool_prepare.json \
-  --output structure/2_literature/citation_pool/master.bib \
-  ${EXTRA_BIB_FLAG}
-# EXTRA_BIB_FLAG: 有源项目时为 --extra-bib <源项目bib路径>；否则省略
+python3 ~/.claude/skills/lit-pool/finalize_pool.py --lit-dir $L
 ```
 
-> **源项目 bib 整合**：当 `--extra-bib` 传入时，源项目文献直接从源 bib 复制条目（仅更新 citation key），无需 RIS→BibTeX 转换。新检索文献仍通过 RIS 匹配转换。
+阻断：master_report.md 缺失或仍有 JUDGE；池内键不在 master.bib；6 个池文件的键与准备好的语料不一致（语料表的行必须等于池内唯一键集合）。提醒：method_landscape 缺失；准备之后 tagged_reports 又有变化（应从步骤 1 重跑）。通过后写出 `literature_manifest.json`（citation_key、书目、tier、tags、pools、directions、reasons、source_origin、溯源记录；不含哈希）。
 
-**脚本职责**（`ris2bib.py`）：
-1. 从 `_pool_prepare.json` 读取 citation key 映射表
-2. 解析 `*.ris` 文件（`utf-8-sig` 编码处理 BOM）
-3. 按 first_author+year 匹配，用标题区分同名
-4. 转换字段：TY→@article/@inproceedings, AU→author, TI→title, T2→journal, PY→year, VL→volume, IS→number, SP/EP→pages, DO→doi
-5. 处理多作者（" and " 连接）、特殊字符转义
-6. 未匹配文献生成 stub 条目（标注 TODO）
-7. 校验：括号平衡、必填字段、回读验证
-8. stdout 输出匹配率 + `VERIFY: PASS|FAIL`
+下游只读复验（build-intro-lit-table 等）：`python3 ~/.claude/skills/lit-pool/finalize_pool.py --lit-dir $L --check-only`。
 
-### 8.2 主 Agent 校验
+## 步骤 8：汇报与清理
 
-VERIFY 必须为 PASS。如有未匹配文献（stub），展示列表提醒用户后续手动补充。
+- 汇报：唯一论文数与分级、各池条目数、COMP/METHOD 风险、master_report 结论要点、method_landscape 写到哪个文件。运行 `python3 ~/.claude/skills/lit-workflow/lit_status.py --project-root . --check final`。
+- 下一步：`/idea-refine`（审 idea 与方法方向）；Introduction 文献表见 `/build-intro-lit-table`。
+- 清理（可选，须用户确认）：只处理运行目录 `_review_runs/`、`_tag_runs/`、`_pool_runs/`，确认后移入 `$L/_archive/{日期}/`。**永不处理** `_quota_result.json`、`lit_status.md`、`_screen_runs/`（筛选备份）、任何 `direction*` 文件、`tagged_reports/`、报告与池文件。禁止 `rm _*.json` 一类通配删除。清理后 `finalize_pool.py` 只能用 `--check-only`。
+- 建议提交范围（用户确认后提交）：`$L/citation_pool/`、`$L/literature_manifest.json`、`$L/master_report.md`、`$L/method_landscape*.md`。
 
-**注意**：
-- master.bib 是完整文献库（~200-300 条），项目 bib 文件只包含正文实际引用的条目
-- `/method-audit` 在确认 X.md `## 正文要点` 时，从 master.bib 提取新增 citation key 条目追加到项目 bib
-- `/narrative` 和 `/technical` 在写入 manuscript.tex 后立即同步 bib（提取本次写入的 keys → 不在项目 bib 则从 master.bib 补充）
+## 阻断与提醒
 
-> **中文文献 BibTeX 提示**：CNKI 来源文献的 BibTeX 条目自动包含 `language = {chinese}` 字段。LaTeX 编译需使用 xelatex/lualatex + UTF-8 编码以正确渲染中文。
-
----
-
-## 步骤 9：清理 pipeline 中间文件
-
-文献工作流（lit-plan → [lit-screen] → lit-review → lit-tag → lit-pool）全部完成后，清理所有中间文件。
-
-```bash
-# 按约定：所有以 _ 开头的文件/目录均为 pipeline 中间产物
-rm -rf structure/2_literature/_batch/              # lit-review batch 文件
-rm -rf structure/2_literature/_tags/               # lit-tag 标签列表
-rm -rf structure/2_literature/_tmp_agent_inputs/   # lit-pool agent 输入文件（目录形式）
-rm -f  structure/2_literature/_tmp_agent_input_*.txt   # lit-pool agent 输入文件（散文件形式）
-rm -f  structure/2_literature/_tmp_pool_agent*_raw.md  # lit-pool agent 原始输出
-rm -f  structure/2_literature/_tmp_pool_agent*.md       # lit-pool agent 标准化输出
-rm -f  structure/2_literature/_*.json              # _dispatch_plan.json, _screening_merged.json,
-                                                   # _tag_aggregate.json, _pool_prepare.json 等
-```
-
-> **命名约定**：pipeline 中所有中间文件/目录以 `_` 前缀命名，永久产出不以 `_` 开头。这样清理时用通配符 `_*` 即可，不需要逐个枚举文件名。
->
-> **永久保留的文件**：direction reports（文献+标签）、screening_summary_report.md（筛选统计）、tag_report.md（标签统计）、citation_pool/（引用池）、master.bib（BibTeX）、method_landscape.md（方法论综述）、literature_search_plan.md（检索方案）。
-
-### 📌 Checkpoint 3：Git 备份文献管线最终交付物（不可跳过）
-
-清理完成后，**必须**备份整个文献管线的最终产出：
-
-```bash
-git add structure/2_literature/citation_pool/ \
-       structure/2_literature/citation_pool/master.bib \
-       structure/2_literature/master_report.md \
-       structure/2_literature/method_landscape.md \
-       structure/2_literature/screening_summary_report.md
-git commit -m "Checkpoint: lit-pool complete (citation pool + master.bib + method_landscape)"
-```
-
-> **为什么**：这是 lit-plan → [lit-screen] → lit-review → lit-tag → lit-pool 管线的最终交付物，直接喂给下游 /narrative 和 /technical 写作。
-
----
-
-## 步骤 10：Zotero 项目集合同步
-
-将引用池中的文献同步到 Zotero，在 `01-research` 下创建项目集合及标签子集合。
-
-> **前提**：Zotero 桌面端正在运行且 MCP 工具可用。如果 MCP 不可用，跳过此步骤并提示用户。
-
-### 10.1 读取项目信息
-
-从项目目录名或 CLAUDE.md 中提取：
-- 项目编号（如 `zy06`）
-- 项目简称
-- 目标期刊缩写
-
-构造集合名：`{编号}_{简称}_{期刊}`（如 `zy06_碳标签博弈_BSE`）
-
-### 10.2 创建集合结构
-
-使用 `zotero_search_collections` 搜索名为 `01-research` 的集合获取其 Key（不要硬编码 Key 值，因为 Zotero 集合重建后 Key 会变化）。然后检查该集合下是否已存在同名项目集合：
-- **已存在**：复用现有集合，不重复创建
-- **不存在**：`zotero_create_collection(name="{编号}_{简称}_{期刊}", parent_collection="{01-research的Key}")`
-
-在项目集合下创建 7 个子集合（并行调用）：
-
-```
-BG / LR / GAP / METHOD / DISC / COMP / others
-```
-
-每个：`zotero_create_collection(name="{tag}", parent_collection="{project_coll_key}")`
-
-### 10.3 解析引用数据
-
-1. **解析 `master.bib`**：提取 citation_key → DOI 映射
-   - 正则匹配 `@\w+\{([^,]+),` 提取 citation key，`doi\s*=\s*\{([^}]+)\}` 提取 DOI
-   - DOI 清洗：移除 `https://doi.org/` 前缀（若存在），移除尾部空白
-   - DOI 为空的条目跳过 DOI 导入，改用标题搜索（见 10.4）
-
-2. **解析 `citation_pool/*.md`**（BG/LR/GAP/METHOD/DISC/COMP）：
-   - 跳过文件头（`#` 标题行、`>` 注释行）和表格分隔线（`|:---`）
-   - 按 markdown 表格行解析，citation key 位于第 4 列：`| 分级 | 作者 | 年份 | citation key | 引用场景 | 期刊 |`
-   - **注意**：COMP.md 与其他 pool 文件**统一为 6 列**（历史上曾设计 7 列但导致下游解析错位，已简化）；"与本研究的关键差异"合并到第 5 列"引用场景"中，以 "引用场景: ...；关键差异: ..." 形式呈现
-   - 文件名即标签名：`BG.md` → BG，`METHOD.md` → METHOD，以此类推
-   - METHOD.md 内部可能有 METHOD-基础/METHOD-先例 子标签、GAP.md 可能有 GAP-RQ1/GAP-RQ2 子标签——统一归入对应的 METHOD/GAP 子集合
-   - 同一 citation key 出现在多个 pool 文件中时，合并标签列表（放入多个子集合）
-
-### 10.4 批量导入
-
-对每篇论文：
-
-```
-zotero_add_by_doi(
-    doi = "{doi}",
-    collections = ["{BG_key}", "{METHOD_key}", ...],
-    tags = ["{project_id}"]
-)
-```
-
-执行要点：
-- **尽可能并行**调用多个导入
-- DOI 缺失时：`zotero_search_items(query="{title}")` 按标题搜索 → 找到后 `zotero_manage_collections(item_keys=[...], add_to=[...])` 添加到子集合
-- 失败不中断，记录标题和错误原因，继续处理其他论文
-
-### 10.5 同步报告
-
-```
-## Zotero 同步完成
-
-项目集合：{编号}_{简称}_{期刊}
-
-| 子集合 | 条目数 |
-|:-------|:-----:|
-| BG     | N     |
-| LR     | N     |
-| GAP    | N     |
-| METHOD | N     |
-| DISC   | N     |
-| COMP   | N     |
-
-成功: X / 失败: Y
-```
-
-如有失败论文，列出标题和原因。
-
----
-
-## 边界条件处理
-
-| 情况 | 处理 |
-|:-----|:-----|
-| direction reports 不存在 | 停止，提示先运行 `/lit-review` |
-| 某标签下文献数为0 | 在对话中警告，建议补检 |
-| citation_pool/ 目录已存在 | 询问覆盖/跳过 |
-| 某章节md不存在 | 跳过该章节的引用池更新 |
-| direction report 格式异常 | 报告错误，继续处理其他 reports |
-| tag_report.md 不存在 | 警告标签统计缺失，建议先运行 `/lit-tag` |
-| Zotero MCP 不可用 | 跳过步骤 10，提示用户确认 Zotero 已启动后手动重试 |
-| 项目集合已存在 | 复用现有集合，不重复创建 |
+| 情形 | 处理 |
+|---|---|
+| 存在未确认跳过的 FAILED 方向；缺带标签副本 | 阻断（步骤 0） |
+| 带标签副本与 review 报告不一致；非法标签；key 冲突/格式错误 | 阻断（步骤 1） |
+| worker 重试后仍失败 | 停止，报告 |
+| RIS 匹配失败（会产生 TODO 条目） | 阻断（步骤 4） |
+| JUDGE ≠ 0；池内键不在 master.bib；语料表与池键不一致 | 阻断（步骤 7） |
+| COMP/METHOD 为空、达标率低、上游比下游新 | 提醒 |

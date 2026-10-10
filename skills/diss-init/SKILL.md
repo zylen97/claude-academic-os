@@ -39,7 +39,7 @@ description: "初始化学位论文项目：交互式确认章节骨架（到三
 
 ### Step 1.5: 创建 structure/ 共享目录 + 复制源项目 idea.md
 
-为了与下游 `/lit-plan`、`/lit-review`、`/lit-pool`、`/figure`、`/latex-table` 等通用 skill 的目录契约对齐，学位论文项目在 `chapters/` 之外必须额外包含 `structure/` 共享子目录。
+为了与下游 `/lit-plan`、`/lit-workflow`、`/figure`、`/latex-table` 等通用 skill 的目录契约对齐，学位论文项目在 `chapters/` 之外必须额外包含 `structure/` 共享子目录。
 
 ```bash
 mkdir -p structure/0_global
@@ -230,9 +230,7 @@ cp "{SOURCE_PROJECT}/structure/0_global/idea.md" structure/0_global/idea.md
 
 ### Git Checkpoint
 
-```bash
-git add chapters/ && git commit -m "diss-init: create chapter skeleton with section structure"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-init: create chapter skeleton with section structure`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### Step 5.5: bib 文件初始化
 
@@ -252,13 +250,11 @@ git add chapters/ && git commit -m "diss-init: create chapter skeleton with sect
    - key 冲突：{Z} 条（已列出）
    ```
 
-此步骤只在 init 阶段执行一次，后续文献补充通过 /lit-review 工作流处理。
+此步骤只在 init 阶段执行一次，后续文献补充通过 /lit-workflow（从 review 重跑）处理。
 
 ### Git Checkpoint
 
-```bash
-git add *.bib && git commit -m "diss-init: migrate bib from source project"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-init: migrate bib from source project`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### Step 6: 填写封面信息
 
@@ -326,18 +322,15 @@ git add *.bib && git commit -m "diss-init: migrate bib from source project"
 
 运行 `latexmk` 编译，确认章节骨架可以正常生成 PDF。如有编译错误，当场修复。
 
-### Git Checkpoint + Push（里程碑：项目初始化完成）
+### Git Checkpoint（里程碑：项目初始化完成）
 
-```bash
-git add -A && git commit -m "diss-init: complete project initialization (skeleton + bib + cover)"
-git push
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-init: complete project initialization (skeleton + bib + cover)`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ## 产出物清单
 
 - [ ] chapters/ 下所有 .tex 文件（含三级标题骨架 + 字数/来源注释）
 - [ ] `structure/0_global/idea.md` 已从源项目复制（供 /lit-plan 读取）
-- [ ] `structure/2_literature/` 空目录已创建（供 /lit-plan、/lit-review 工作）
+- [ ] `structure/2_literature/` 空目录已创建（供 /lit-plan、/lit-workflow 工作）
 - [ ] `structure/figures_tables/figures/` 空目录已创建（供 /figure、/latex-table 写入）
 - [ ] main.tex 封面信息已填写
 - [ ] main.tex 的 `\include` 列表与章节文件一致

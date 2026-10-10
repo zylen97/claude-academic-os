@@ -193,7 +193,7 @@ AskUserQuestion（如 `$ARGUMENTS` 未提供足够信息）：
 
 同时读取项目上下文：
 - `structure/0_global/idea.md` → 研究框架理解
-- `structure/3_methodology/methodology.md` → 模型结构（如果画模型图）
+- 项目合同 `CLAUDE.md` 的 `## 技术章节` 中角色为 method 的 manuscript 章节；analytical-model 项目另读 `structure/3_analysis/derivation/` 中的模型设定文件 → 模型结构（如果画模型图）
 - 已有 `fig*.tex` → 风格一致性参考
 
 ### 2A.2 提议设计方案
@@ -695,6 +695,7 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
   - 源脚本（.py / .R）→ 读取代码
 - 如果只有 PDF 没有源脚本 → AskUserQuestion 询问源脚本路径或数据文件路径
 - 也检查 `data/scripts/`、`scripts/`、`code/` 目录下的脚本
+- **数据来源核对**（英文论文项目）：脚本读取的数据文件应是 `structure/0_global/results_register.md` 中某条目的"来源"。未登记 → 提醒用户经 `/analysis` Release 登记（美化只改视觉，不阻断）；`index.md` 的"来源"列写 register ID
 
 ### 2B.2 八维度诊断
 
@@ -836,6 +837,12 @@ AskUserQuestion：
 ```
 
 同时扫描项目的 `data/` 目录了解可用数据文件。
+
+**数据来源门**（规格 §4.7；英文论文项目的数据图，概念图不适用）：
+- 读取 `structure/0_global/results_register.md`。图的数据必须来自其中登记条目的"来源"（`data/results/`、`data/robustness/` 下的输出，或 analytical-model 的 `structure/3_analysis/derivation/checks/` 复核输出与数值研究输出）；脚本只读这些文件，不手工录入数值、不从历史报告或正文中抄数。
+- register 已存在但所需结果未登记 → 停止，提示先经 `/analysis` Release 登记后再画。
+- register 尚不存在（分析阶段的探索图）→ 可以画，`index.md` 来源写脚本输出路径、状态不得高于 drafted，并提醒进入正文前须登记。
+- 完成后在 `index.md` 的"来源"列写 register ID。
 
 ### 2C.2 推荐语言 + 设计方案
 
@@ -983,6 +990,7 @@ AskUserQuestion：
 - 不修改 manuscript.tex（只提供引用代码供用户手动插入）
 - 不修改已有图的数据内容（只改视觉呈现）
 - 不替代用户的学术判断（图的内容选择由用户决定）
+- 数据图的数据只来自 `results_register.md` 登记的来源（见 2C.1 数据来源门）；概念图不受此限
 
 ### Eagle 集成
 - 库路径: `/Users/zylen/Library/CloudStorage/Dropbox/Apps/Eagle/research.library/`

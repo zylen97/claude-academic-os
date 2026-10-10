@@ -1,10 +1,16 @@
 ---
-description: "投稿前终检：引用完整性、格式合规、图表规范、符号一致性（Pre-submission Checklist）"
+description: "投稿前终检：引用键可解析、图表已登记且被引用、术语表一致、正文精简规则、日期检查（规格 §4.6）、格式与投稿附件；红黄绿三级报告，通过并经用户确认后把项目阶段写为 submitted（Pre-submission Checklist）"
 ---
 
 # Pre-Submit — 投稿前终检
 
-全自动扫描 manuscript.tex 和关联文件，生成红黄绿三级检查报告。**不修改任何文件**，只报告问题。
+> 规格：`~/.claude/skills/shared/ACADEMIC-OS-LITE.md`（冲突以规格为准）。正文精简规则：`~/.claude/skills/shared/MANUSCRIPT-ECONOMY.md`。
+> 子 agent：可以在需要时使用子 agent（定义在 `~/.claude/agents/`），并在执行前告诉用户将派出哪些。
+> Git：本技能不 stage、不 commit、不 push。
+
+自动扫描 manuscript.tex 与关联文件，生成红黄绿三级检查报告。**不修改稿件与任何项目文件**；只写两处：检查报告 `submission/pre_submit_report.md`，以及（全部 🔴 清零且用户确认后）项目合同中的项目阶段。
+
+分级原则（规格 §0）：🔴 只用于真实研究风险或投稿必然被退回的问题（引用键不存在、引用了不存在的图表、登记的证据不存在、占位符残留、编译错误、缺必需文件）；格式、命名、时间先后不一致记 🟡 并给出回流路线。精简检查保持严格，但不把通用 caveat、可选扩展或审稿人口味伪装成缺陷。
 
 **输入** `$ARGUMENTS`：无参数。直接运行 `/pre-submit`。
 
@@ -14,85 +20,59 @@ description: "投稿前终检：引用完整性、格式合规、图表规范、
 
 ### 0.1 读取项目配置
 
-- 读取 `CLAUDE.md` → 提取：
-  - `{MAIN_TEX}`（主文件路径，通常为 `manuscript.tex`）
-  - `{BIB_FILE}`（bib 文件路径）
-  - `{TARGET_JOURNAL}`（目标期刊）
-  - `{PUBLISHER}`（出版社）
-  - `{METHOD_TYPE}`（方法类型）
-- Fallback：Glob(`*.tex`) 查找含 `\documentclass` 的文件；Glob(`*.bib`) 查找 bib 文件
+读取项目合同 `CLAUDE.md`，提取：
+- `{MAIN_TEX}`（通常为 `manuscript.tex`）、`{BIB_FILE}`、`{TARGET_JOURNAL}`、`{PUBLISHER}`
+- 方法类型、"方法 profile"、`## 技术章节` 表、`## 项目阶段`
+
+Fallback：查找含 `\documentclass` 的 `*.tex` 作为主文件；查找 `*.bib`。
 
 ### 0.2 读取文件
 
-- 读取 `{MAIN_TEX}` 全文
-- 读取 `{BIB_FILE}` 全文
-- 扫描 `submission/` 目录下的所有 `.tex` 文件（coverletter, titlepage, highlights, declaration 等）
-- 检查 `structure/3_methodology/benchmark/method_audit_report.md` 是否存在（用于流程完整性检查）
+- `{MAIN_TEX}` 全文、`{BIB_FILE}` 全文；
+- `submission/` 下全部 `.tex`（coverletter、titlepage、highlights、declaration 等）；
+- `structure/0_global/` 下的 `idea.md`、`analysis_plan.md`、`results_register.md`、`technical_map.md`（存在的都读；只是 md，不做任何哈希或 schema 校验）；
+- `structure/figures_tables/index.md`（如存在）。
 
 ---
 
-## 步骤 1：引用完整性检查
+## 步骤 1：引用完整性
 
-### 1.1 正文 → bib 方向（幽灵引用）
+### 1.1 正文 → bib（幽灵引用）
 
-扫描 `{MAIN_TEX}` 中所有 `\citep{}`、`\citet{}`、`\cite{}` 命令，提取所有 citation key。
+提取 `{MAIN_TEX}` 中全部 `\cite`、`\citep`、`\citet` 及其变体（含 `\citealp`、`\citeauthor`、`\citeyear`，含可选参数与多 key 逗号分隔）的 key。对每个 key 检查是否存在于 `{BIB_FILE}`：
+- 存在 → ✅
+- 不存在 → 🔴 幽灵引用：正文引了但 bib 里没有
 
-对每个 key，检查是否存在于 `{BIB_FILE}` 中：
-- **存在** → ✅
-- **不存在** → 🔴 幽灵引用（Ghost Citation）：正文引了但 bib 里没有
+### 1.2 bib → 正文（孤立条目）
 
-### 1.2 bib → 正文方向（孤立条目）
-
-对 `{BIB_FILE}` 中的每个条目，检查其 key 是否出现在 `{MAIN_TEX}` 正文中：
-- **出现** → ✅
-- **未出现** → 🟡 孤立条目（Orphan Entry）：bib 里有但正文没引
+`{BIB_FILE}` 中未被正文引用的条目 → 🟡 孤立条目。
 
 ### 1.3 bib 条目质量
 
-对每个 bib 条目检查：
-- **缺少必填字段**：title, author, year, journal/booktitle → 🔴
-- **年份格式异常**：非 4 位数字、含字母、与 key 中年份不一致 → 🟡
-- **重复条目**：相同 title+year 或相同 DOI → 🟡
-- **DOI 缺失**：article 类型无 doi 字段 → 🟢（建议补充）
+- 缺少必填字段（title、author、year、journal/booktitle）→ 🔴
+- 年份格式异常（非 4 位数字、与 key 中年份不一致）→ 🟡
+- 重复条目（相同 title+year 或相同 DOI）→ 🟡
+- article 缺 DOI → 🟢
 
-### 1.4 bib 深度清洗检查
+### 1.4 bib 深度清洗
 
-#### 期刊名一致性
-扫描所有 `journal` 字段，检查同一期刊是否有不同写法：
-- 缩写 vs 全称混用（如 "J. Manag. Eng." vs "Journal of Management in Engineering"）→ 🟡
-- 大小写不一致（如 "automation in construction" vs "Automation in Construction"）→ 🟡
-- 列出所有检测到的期刊名变体组，供用户统一
+- **期刊名一致性**：同一期刊缩写与全称混用、大小写不一致 → 🟡，列出变体组供统一；
+- **Citation key 格式**：不符合 `auth.lower + year + shorttitle(1,1)` → 🟢（外部导入条目可能如此，不阻断）；
+- **年份分布**：报告近 5 年占比、最早与最晚年份；近 5 年占比 < 30% → 🟡。
 
-#### Citation key 格式
-检查所有 key 是否符合项目规范（`auth.lower + year + shorttitle(1,1)`，见 CLAUDE.md）：
-- 不符合规范 → 🟢（仅提示，不阻断——可能是外部导入的条目）
+---
 
-#### 年份分布
-统计引用文献的年份分布，报告：
-- 近 5 年占比
-- 最早年份和最晚年份
-- 如果近 5 年占比 < 30% → 🟡（部分期刊要求引用新文献）
-
-## 步骤 2：格式合规检查
+## 步骤 2：格式合规
 
 ### 2.1 字数统计
-
-使用 `texcount` 或手动估算（正文单词数，排除公式、表格、参考文献）：
 
 ```bash
 texcount -1 -sum -merge {MAIN_TEX} 2>/dev/null || echo "texcount not available"
 ```
 
-如果 `texcount` 不可用，用正则粗估（去除 LaTeX 命令后的单词数）。
-
-报告：
-- 正文字数（估算）
-- 参考文献数量（bib 条目数）
-- 图表数量（`\begin{figure}` + `\begin{table}` 计数）
+不可用时用正则粗估（去除 LaTeX 命令后的单词数）。报告：正文字数、参考文献数量、图表数量（`\begin{figure}` + `\begin{table}`）。
 
 ### 2.2 结构完整性
-
-检查 `{MAIN_TEX}` 中是否包含以下必备结构：
 
 | 检查项 | 匹配模式 | 缺失级别 |
 |--------|---------|---------|
@@ -107,135 +87,181 @@ texcount -1 -sum -merge {MAIN_TEX} 2>/dev/null || echo "texcount not available"
 
 ### 2.3 TODO / 占位符残留
 
-扫描 `{MAIN_TEX}` 和 `submission/` 下所有 `.tex` 文件，查找：
-- `TODO`（大小写不敏感）
-- `XXX`、`FIXME`、`TBD`
-- `\textcolor{red}`（红色标记文本）
-- `???`、`000`（占位数字）
+扫描 `{MAIN_TEX}` 与 `submission/` 下全部 `.tex`：`TODO`（不区分大小写）、`XXX`、`FIXME`、`TBD`、`\textcolor{red}`、`???`、作为占位数字的 `000`。每处命中 → 🔴。
 
-每处命中 → 🔴（投稿前必须清除）
-
-### 2.4 LaTeX 编译检查（dry-run，不产出文件）
+### 2.4 LaTeX 编译检查（编译到临时目录，不改项目产物）
 
 ```bash
-latexmk -n {MAIN_TEX} 2>&1 | tail -50
+tmp=$(mktemp -d)
+latexmk -interaction=nonstopmode -outdir="$tmp" {MAIN_TEX} > "$tmp/run.txt" 2>&1
+grep -nE "^!|Error|Emergency stop" "$tmp"/*.log | head -20
+grep -nE "undefined|multiply defined" "$tmp"/*.log | head -20
+grep -nE "Warning" "$tmp"/*.log | head -20
+grep -nE "Overfull \\\\hbox \(([2-9][0-9]|[1-9][0-9]{2,})" "$tmp"/*.log | head -20
 ```
 
-检查输出中的：
-- `Warning` → 🟡（列出前 10 条）
-- `Error` / `!` → 🔴
-- `Overfull \hbox` 超过 20pt → 🟡（可能导致文字溢出页边距）
+latexmk 读取项目 `latexmkrc` 决定编译引擎。判定：
+- `!` / Error / Emergency stop → 🔴
+- undefined citation / undefined reference / duplicate label → 🔴
+- 其他 Warning → 🟡（列前 10 条）
+- `Overfull \hbox` 超过 20pt → 🟡
 - 编译成功且无 Error → ✅
+
+检查结束后删除临时目录。
 
 ---
 
 ## 步骤 3：符号与术语一致性
 
-### 3.1 符号一致性
+### 3.1 符号一致性（启发式）
 
-扫描正文中的数学符号（`$...$` 和 `\(...\)` 内的内容），检查：
-- 同一概念是否在不同位置使用了不同符号（如 $\lambda$ vs $\Lambda$）
-- 符号是否在首次使用时有定义
+提取全部行内公式（`$...$`、`\(...\)`），按 section 分组比较符号集合：同一概念在不同位置使用不同符号、符号首次使用时无定义 → 🟡，提醒人工确认。
 
-**实现方式**：提取所有行内公式，按 section 分组，对比各 section 中出现的符号集合，标记不一致之处。
+### 3.2 术语表一致性（`technical_map.md` 第 2 节）
 
-> 这是启发式检查，可能有误报。标记为 🟡，提醒用户人工确认。
+`technical_map.md` 存在时，读取第 2 节"术语表"（术语｜定义｜不得混用的近义词）：
+- 对每一行，在 `{MAIN_TEX}` 正文（不含注释、公式、`\cite`/`\ref`/`\label` 参数）中按词边界、不区分大小写搜索"不得混用的近义词"；
+- 命中 → 🟡，列出位置、命中词与应使用的术语；同一近义词在多个章节命中时合并成一条；
+- 术语表中的术语在正文从未出现 → 🟢（可能是表过时，提醒复核术语表）。
 
-### 3.2 术语一致性
+`technical_map.md` 不存在 → 跳过本项并在报告中注明。
 
-检查常见的术语不一致：
-- 同一概念的不同写法（如 "game-theoretic" vs "game theoretic"，"decision-making" vs "decision making"）
-- 缩写首次出现时是否有全称定义
-- 缩写使用是否一致（定义后是否始终用缩写而非全称）
+### 3.3 通用术语一致性
+
+- 同一概念的不同写法（如 "game-theoretic" vs "game theoretic"，"decision-making" vs "decision making"）→ 🟡；
+- 缩写首次出现时无全称定义 → 🟡；
+- 定义缩写后又混用全称 → 🟡。
 
 ---
 
 ## 步骤 4：图表检查
 
-### 4.1 图表引用完整性
+### 4.1 引用完整性
 
-扫描所有 `\label{fig:*}` 和 `\label{tab:*}`，检查是否在正文中被 `\ref{}`/`\autoref{}`/`\cref{}` 引用：
-- 有 label 无 ref → 🟡 未引用的图表
+扫描全部 `\label{fig:*}` 与 `\label{tab:*}`：
+- 有 label 无 `\ref` / `\autoref` / `\cref` → 🟡 未被正文引用的图表
 - 有 ref 无 label → 🔴 引用了不存在的图表
 
-### 4.2 图表编号连续性
+### 4.2 登记（`structure/figures_tables/index.md`）
 
-检查 Figure 和 Table 编号是否连续（1, 2, 3...），有无跳号。
+`index.md` 存在时：
+- 正文中每个图表应在 `index.md` 中有一行（图按 `\includegraphics` 文件名匹配"文件名"列；表按 caption 标题或编号匹配"标题" / "编号"列——注册表没有 label 列）→ 缺失 🟡；
+- `index.md` 中登记、但正文未使用的图表 → 🟢；
+- `index.md` 中为数据图 / 结果表记录的 register ID（如有）必须在 `results_register.md` 中存在 → 不存在 🔴（登记的证据不存在）；`results_register.md` 不存在时该项记 🟡 并注明无法核对。
 
-### 4.3 图片文件检查
+`index.md` 不存在 → 🟡 "图表未登记"。
 
-扫描所有 `\includegraphics{}` 的文件路径：
-- 文件不存在 → 🔴
-- 文件存在但格式不推荐（如 `.jpg` 用于线图、`.bmp`）→ 🟡（建议用 PDF/EPS 矢量图或 300dpi PNG）
+### 4.3 编号连续性
+
+Figure 与 Table 编号是否连续，有无跳号。
+
+### 4.4 图片文件
+
+`\includegraphics{}` 的文件不存在 → 🔴；格式不推荐（线图用 `.jpg`、`.bmp`）→ 🟡（建议 PDF/EPS 或 300dpi PNG）。
 
 ---
 
-## 步骤 5：submission/ 文件检查
+## 步骤 5：submission/ 文件
 
 ### 5.1 Cover letter
 
-检查 `submission/coverletter.tex`：
-- 不存在 → 🔴
-- 存在但含 TODO → 🔴（未填写）
-- 存在且无 TODO → ✅
+`submission/coverletter.tex`：不存在 → 🔴；含 TODO → 🔴；否则 ✅。
 
 ### 5.2 其他投稿附件
 
-根据 `{PUBLISHER}` 检查必要文件：
+按 `{PUBLISHER}` 检查必需文件：
+- **elsevier**：coverletter、declaration、highlights、titlepage
+- **asce**：coverletter
+- **emerald**：coverletter、titlepage
+- **sage**：coverletter
+- **ieee**：coverletter
+- **wiley**：coverletter、titlepage
 
-**elsevier**：coverletter, declaration, highlights, titlepage
-**asce**：coverletter
-**emerald**：coverletter, titlepage
-**sage**：coverletter
-**ieee**：coverletter
-**wiley**：coverletter, titlepage
-
-缺少必要文件 → 🔴
+缺少必需文件 → 🔴。
 
 ---
 
-## 步骤 6：贡献一致性检查
-
-从 `{MAIN_TEX}` 中提取两处贡献声称，交叉比对：
+## 步骤 6：贡献一致性与正文精简
 
 ### 6.1 提取贡献点
 
-- **Introduction 声称**：扫描 Introduction section 中含 "contribut" 的段落，提取声称的贡献列表
-- **Discussion 声称**：扫描 Discussion section 中含 "contribut" / "implicat" 的段落，提取展开论述的贡献列表
-- **idea.md 声称**（如存在）：从 `structure/0_global/idea.md` 提取贡献点
+- Introduction 中含 "contribut" 的段落 → 声称的贡献列表；
+- Discussion 中含 "contribut" / "implicat" 的段落 → 展开的贡献列表；
+- `idea.md` 贡献点（如存在）。
 
-### 6.2 一致性检查
+### 6.2 一致性（语义级，均记 🟡）
 
-对比三处来源，检查：
-- **Introduction 声称的贡献在 Discussion 中有对应展开吗？** 有声称但无展开 → 🟡（空头支票）
-- **Discussion 展开的贡献在 Introduction 中有预告吗？** 有展开但无预告 → 🟡（突兀）
-- **贡献数量是否一致？** Introduction 说 3 个，Discussion 只展开 2 个 → 🟡
-- **贡献措辞是否匹配？** 提取关键短语对比，严重不一致 → 🟡
+- Introduction 声称、Discussion 未展开 → 空头支票；
+- Discussion 展开、Introduction 未预告 → 突兀；
+- 贡献数量不一致；关键短语严重不一致。
 
-> 这是语义级检查，基于关键词和段落级匹配，可能有误判。标记为 🟡，供用户确认。
+### 6.3 正文精简规则（`MANUSCRIPT-ECONOMY.md`）
+
+只检查已经存在的防御性冗余，不发明"可能缺少"的通用 caveat：
+- 同一 noncausal、sample、context、temporal、proxy 或 limitation 边界跨 section 重复；
+- 已确认的结果被连续 `may / might / could / perhaps` 弱化；
+- table note 超出单元格解码，重复 Methodology、Results、Discussion 或稳健性辩护；
+- 内部流程语言泄漏进正文（register、profile、map、release、gate、audit、validation、hash 等）；
+- caveat 压过其保护的实质 claim。
+
+重复防御与可合并的 caveat 记 🟡，并给出唯一建议保留位置；只有导致 claim 自相矛盾、实质误读或内部流程语言泄漏时记 🔴。只给出聚焦的删除 / 移位建议，不开启新的全稿审稿轮次。
 
 ---
 
-## 步骤 7：流程完整性检查
+## 步骤 7：流程状态与日期检查
 
-检查本项目是否按 pipeline 顺序执行了各关键步骤：
+**日期检查（规格 §4.6，取代哈希链；只提醒，不阻断）**
 
-| 检查项 | 检查方式 | 缺失级别 |
-|--------|---------|---------|
-| method-audit | `structure/3_methodology/benchmark/method_audit_report.md` 存在？ | 🟡 |
-| method-audit 红色项已清 | report 中无未修复的 🔴 | 🟡 |
-| writing brief | `submission/writing_brief.md` 存在？若否则 fallback 查 `drafts/writing_brief.md`（finalize Phase 4 才把它从 drafts/ 挪到 submission/，未跑 finalize 时 drafts/ 版即合格） | 🟢 |
-| finalize: Conclusion | manuscript.tex 的 Conclusion section **词数 ≥ 150** 且不含占位符（TODO/XXX/TBD/???/000/\textcolor{red}）| 🔴 |
-| finalize: Abstract | manuscript.tex 的 Abstract **词数 ≥ 120** 且不含占位符 | 🔴 |
-| finalize: Cover Letter | `submission/coverletter.tex` 存在？ | 🔴 |
+读取四个日期（都在 `structure/0_global/` 下）：
+
+| 记号 | 来源 |
+|---|---|
+| P | `analysis_plan.md` 第 7 节"变更记录"表中最晚的日期（表为空 → 无） |
+| R | `results_register.md` 的 `发布:` 行第一个日期（register 发布日期） |
+| M | `technical_map.md` 的 `依据: results_register 发布 YYYY-MM-DD` 中的日期 |
+| T | `technical_map.md` 的 `技术正文完成:` 日期（technical Tex 结束时写入） |
+
+逐条判定（"晚于" = 严格晚于；同一天不算晚于）：
+
+| # | 条件 | 含义 | 回流 |
+|---|---|---|---|
+| D0 | 三个文件都不存在 | 遗留项目，未走 analysis / technical 流程 | 只报告"跳过日期检查"，后续检查照常 |
+| D0' | 只存在其中一部分 | 流程未走完 | 缺计划或 register → `/analysis`；缺 map → `/technical` |
+| D1 | 计划状态行不是 `approved` | 设计未批准 | `/analysis` Plan |
+| D2 | R 为空 | register 未发布 | `/analysis` Release |
+| D3 | T 为空 | 技术正文未完成 | `/technical` |
+| D4 | P 晚于 T | 技术正文完成后设计又被改动 | 按这些变更行的"影响"列决定（见下） |
+| D5 | R 晚于 T | 技术正文完成后 register 重新发布 | `/technical` 修复受影响段落，并重写完成日期 |
+| D6 | M ≠ R（两者都有） | technical_map 依据的不是当前 register | `/technical` Map 按当前 register 更新 |
+| D7 | P 晚于 R，且该变更行"影响"列没有明确写"不影响 register" | 设计改了，register 还没跟进 | `/analysis` Run → Release |
+
+D4 / D7 的回流范围按变更行"影响"列判断：
+
+- 涉及 RQ、模型族、主设定、数据边界或核心构念（设计层）→ `/idea-refine` → `/analysis` Plan 重新批准 → Run → Release → `/technical` 修复；
+- 计划第 1、3、4、5 节的其他改动 → `/analysis` Run → Release（重新发布 register）→ `/technical` 修复；
+- "影响"列明确写"不影响 register / technical"（只影响 narrative）→ 只提醒复核 narrative 对应部分；
+- "影响"列为空或写不清 → 按第二种（analysis → technical）提醒。
+
+P 或 R 与 T 是同一天时，不判为晚于，但注明"同日，日期无法区分先后，请确认该变更已反映在技术正文中"。
+
+输出格式：先列出触发的条目（编号、涉及的日期、对应变更行原文），再给出**一条合并后的回流路线**（去重并按 idea-refine → analysis Plan → analysis Run/Release → technical → narrative 的顺序排列），最后注明"完成回流后重新运行本技能"。没有触发任何条目时输出"日期检查：通过（P=…，R=…，M=…，T=…）"。日期只用于判断先后，不作为任何正文内容的来源。
+
+在本技能中，D0' 与 D1–D7 每个触发条目记 🟡，并在报告"流程状态"一节给出合并后的回流路线；D0 记 🟢。
+
+另查：
+
+| 检查项 | 方式 | 级别 |
+|--------|------|------|
+| Conclusion | Conclusion section 词数 ≥ 150 且无占位符 | 🔴 |
+| Abstract | Abstract 词数 ≥ 120 且无占位符 | 🔴 |
+| Cover Letter | 见 5.1 | — |
+| writing brief | `submission/writing_brief.md` 或 `drafts/writing_brief.md` 存在 | 🟢（可选） |
 
 ---
 
 ## 步骤 8：生成报告
 
-写入前确保目录存在：`mkdir -p submission/`
-
-将所有检查结果写入 `submission/pre_submit_report.md`：
+`mkdir -p submission/`，写入 `submission/pre_submit_report.md`（每次覆盖）：
 
 ```markdown
 # Pre-Submission Checklist — {PAPER_TITLE}
@@ -243,8 +269,6 @@ latexmk -n {MAIN_TEX} 2>&1 | tail -50
 > Generated: {date}
 > Target journal: {TARGET_JOURNAL} ({PUBLISHER})
 > Manuscript: {MAIN_TEX}
-
----
 
 ## Summary
 
@@ -262,77 +286,53 @@ latexmk -n {MAIN_TEX} 2>&1 | tail -50
 | 参考文献数量 | {n} |
 | 图表数量 | {n} Fig + {n} Tab |
 
----
+## 流程状态（日期检查）
+
+P={…} R={…} M={…} T={…}
+{触发条目与合并回流路线，或"通过"}
 
 ## 🔴 MUST-FIX
 
 ### 1. [引用] 幽灵引用：{key}
 正文 L{行号} 引用了 `{key}`，但 bib 中不存在。
-
-### 2. [格式] TODO 残留
-{文件名} L{行号}: `{匹配内容}`
-
 ...
 
 ## 🟡 WARNING
-
-### 1. [引用] 孤立条目 ({n} 条)
-以下 bib 条目未在正文中引用：
-- `{key1}` — {title} ({year})
-- `{key2}` — {title} ({year})
-
-### 2. [符号] 可能的符号不一致
-Section 3 使用 `$\lambda$`，Section 4 使用 `$\Lambda$`（同一概念？）
-
 ...
 
 ## 🟢 INFO
-
-### 1. [引用] {n} 条 bib 条目缺少 DOI
 ...
-
----
 
 ## Verdict
 
-{如果 🔴 = 0}:
-✅ **READY TO SUBMIT** — 未发现必须修复的问题。建议检查 🟡 项后提交。
-
-{如果 🔴 > 0}:
-❌ **NOT READY** — 请先修复 {n} 条 🔴 问题。
+{🔴 = 0}: ✅ READY TO SUBMIT — 未发现必须修复的问题。建议处理 🟡 项后提交。
+{🔴 > 0}: ❌ NOT READY — 请先修复 {n} 条 🔴 问题。
 ```
 
-### 展示报告
+### 展示报告与阶段写入
 
-将报告完整展示给用户。**不执行任何修改**——pre-submit 是只读检查工具，修改由用户自行决定。
+完整展示报告。
 
-如果 🔴 = 0，提示：
-```
-✅ 检查通过！论文已准备好投稿。
-
-更新项目阶段为 submitted？
-(1) 确认（更新 CLAUDE.md 阶段为 submitted）
-(2) 暂不更新（还有其他调整）
-```
-
-AskUserQuestion 等待用户确认。用户选 (1) → 在 CLAUDE.md 中更新 `状态: submitted`、`更新时间: {TODAY}`。用户选 (2) → 不更新。
-
-> 这是 pre-submit 唯一的写操作——仅更新项目阶段元数据，不改稿件内容。
-
-如果 🔴 > 0，提示：
+🔴 > 0：
 ```
 ❌ 发现 {n} 条必须修复的问题，请处理后重新运行 /pre-submit。
 ```
+
+🔴 = 0：用 AskUserQuestion 询问（问题中列出 🟡 数量，并单独列出日期检查的触发条目，若有）：
+```
+✅ 检查通过（🔴 = 0；🟡 = {n}，其中日期检查提醒 {k} 条）。
+
+更新项目阶段为 submitted？
+(1) 确认（CLAUDE.md 中写 状态: submitted、更新时间: {TODAY}）
+(2) 暂不更新
+```
+
+用户选 (1) → 在项目合同 `## 项目阶段` 中只改 `状态: submitted` 与 `更新时间: {TODAY}` 两行，保留该节其余行（如 rev-init 写入的基准文件与轮次历史）；该节不存在时按规格 §1 格式新建。选 (2) → 不写。修改轮次重投时同样适用：写 submitted 后，下一轮 /rev-init 依据 `revision-R*/` 目录推断轮次。
 
 ---
 
 ## 全局约束
 
-### 只读
-**pre-submit 不修改任何文件。** 只扫描、只报告。修改是用户的事。
-
-### 幂等
-可以反复运行。每次运行覆盖上一次的 `submission/pre_submit_report.md`。
-
-### 容错
-单项检查失败（如 texcount 不可用、图片路径无法访问）不阻断整个流程，标记该项为 `⚠️ 检查跳过：{原因}` 并继续。
+- **不改稿件**：只扫描、只报告；修改由用户或对应技能完成。
+- **幂等**：可反复运行，每次覆盖 `submission/pre_submit_report.md`。
+- **容错**：单项检查失败（如 texcount 不可用、图片路径无法访问）不阻断整体流程，标记 `⚠️ 检查跳过：{原因}` 并继续。

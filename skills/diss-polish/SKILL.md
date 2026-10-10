@@ -188,11 +188,8 @@ description: "学位论文中文润色：逐章审查 + 调用中文润色 agent
   - Phase 2 跨章一致性检查：**所有章节已 polished** 才触发
   - 单章 polish 不触发阶段转换——"阶段" = 全书状态，"Phase 2" = 全部 polished 后的跨章整合
 
-- Git Checkpoint + Push（里程碑：第 N 章润色完成）：
-  ```bash
-  git add chapters/ch{N}.tex CLAUDE.md && git commit -m "diss-polish: ch{N} polished"
-  git push
-  ```
+- Git Checkpoint（里程碑：第 N 章润色完成）：
+  > Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-polish: ch{N} polished`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 #### 循环 → 回到 Step 2 选择下一章
 
@@ -235,12 +232,9 @@ description: "学位论文中文润色：逐章审查 + 调用中文润色 agent
 
 向用户展示报告，确认后逐项修复并写入 .tex。
 
-### Git Checkpoint + Push（里程碑：跨章一致性检查完成）
+### Git Checkpoint（里程碑：跨章一致性检查完成）
 
-```bash
-git add -A && git commit -m "diss-polish: cross-chapter consistency fixes"
-git push
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-polish: cross-chapter consistency fixes`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ---
 

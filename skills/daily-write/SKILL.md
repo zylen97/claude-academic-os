@@ -737,7 +737,7 @@ No text.
 ### 5.3 NB2 调用（chat completions 接口）
 
 ```bash
-source ~/.claude/scheduled/email-config.sh
+source ~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh
 cd "{Site}"
 BASE="public/blog"
 
@@ -937,7 +937,7 @@ npx gh-pages -d dist --dotfiles
 ### 8.1 凭证 + 板块确认
 
 ```bash
-source ~/.claude/scheduled/email-config.sh   # WECHAT_APPID + WECHAT_APPSECRET
+source ~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh   # WECHAT_APPID + WECHAT_APPSECRET
 ```
 
 板块确认（基于 frontmatter `category` 或 `tags` 推断；不确定时问用户）：
@@ -1280,7 +1280,7 @@ API 推送标题（草稿箱里临时显示）：{api_title ≤10 字}
 
 - ❌ 具体时间戳：凌晨 1 点 / 深夜 2 点 / 周末还在改 / 每天 12 小时
 - ❌ 具体数量：几十个 skill / 18 个项目 / 10 篇论文 / N 门课
-- ❌ 具体工具链清单：`/lit-plan` `/narrative` `/method-audit` 这种暴露工作流细节
+- ❌ 具体工具链清单：`/lit-plan` `/narrative` `/technical` 这种暴露工作流细节
 - ❌ 具体学术指标：一篇 SSCI / 某影响因子期刊 / 某专项基金
 - ✅ 替代表达：一个深夜 / 前阵子 / 这段时间 / 一些 skill / 陆续搭了一些 / 一份成果 / 一篇论文（单数指代）
 

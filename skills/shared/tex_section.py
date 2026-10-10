@@ -9,7 +9,7 @@ tex_section.py — LaTeX Section Tree 工具（共用）
     1. section-tree   — 解析 .tex 构建 Section Tree JSON
     2. match-section  — 在 Section Tree 中模糊匹配
     3. citation-paths — 从章节 md 的 ## 引用池 提取路径
-    4. update-bib     — 扫描 LaTeX cite 命令 → 从 master.bib 提取 → 追加到项目 bib
+    4. update-bib     — 扫描 LaTeX cite 命令并预览缺失条目；写入项目 bib 需显式 --allow-write
 
 用法:
     # 1. 构建 Section Tree
@@ -18,9 +18,8 @@ tex_section.py — LaTeX Section Tree 工具（共用）
     # 2. 匹配 section
     python3 tex_section.py match-section --tree _section_tree.json --query "Literature Review"
 
-    # 3. 提取引用池路径（仅技术型章节 X.md 含 ## 引用池 区块；
-    #    叙述型章节由 /narrative 直接读 citation_pool/，不调用此命令）
-    python3 tex_section.py citation-paths --chapter-md structure/3_methodology/methodology.md
+    # 3. 提取引用池路径
+    python3 tex_section.py citation-paths --chapter-md structure/2_literature/literature.md
 
     # 4. 更新 bib
     python3 tex_section.py update-bib \
@@ -34,6 +33,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 # ===========================================================================
@@ -50,19 +50,20 @@ def build_section_tree(tex_content: str) -> list[dict]:
     """
     LEVEL_MAP = {"section": 1, "subsection": 2, "subsubsection": 3}
 
-    # 匹配 \section{...}, \subsection{...}, \subsubsection{...} 及星号变体
-    # 星号变体（如 \subsection*{Literature positioning}）由 /narrative 在 LR 子模式产出，
-    # /narrative 和 /technical 调度契约都要求纳入定位表（不再跳过）
+    # 匹配 \section{...}, \subsection{...}, \subsubsection{...} 及星号变体。
+    # 星号变体仅用于兼容既有不编号小节；LR positioning table 不再由
+    # narrative 插入为 subsection，也不再由 technical 生成/转写。
     # 使用括号计数来正确处理嵌套括号（如 \section{Introduction to \emph{Game Theory}}）
     cmd_pattern = re.compile(
         r"^[^%]*?"  # 忽略注释行
-        r"\\(section|subsection|subsubsection)\*?\{",
+        r"\\(section|subsection|subsubsection)(\*)?\{",
         re.MULTILINE
     )
 
     nodes = []
     for i, m in enumerate(cmd_pattern.finditer(tex_content)):
         cmd = m.group(1)
+        starred = bool(m.group(2))
         # 从 { 后开始，用括号计数找到匹配的 }
         brace_start = m.end() - 1  # 指向 {
         depth = 0
@@ -82,6 +83,8 @@ def build_section_tree(tex_content: str) -> list[dict]:
             "id": i,
             "level": LEVEL_MAP[cmd],
             "cmd": cmd,
+            "starred": starred,
+            "tex_cmd": f"{cmd}*" if starred else cmd,
             "title": title,
             "line_no": line_no,
             "parent_id": None,
@@ -154,7 +157,7 @@ def cmd_section_tree(args):
     for n in nodes:
         indent = "  " * (n["level"] - 1)
         children = f" ({len(n['children_ids'])} children)" if n["children_ids"] else ""
-        print(f"  {indent}L{n['line_no']:>4d} [{n['cmd']}] {n['title']}{children}")
+        print(f"  {indent}L{n['line_no']:>4d} [{n.get('tex_cmd', n['cmd'])}] {n['title']}{children}")
     print()
 
     if errors:
@@ -192,7 +195,7 @@ def normalize_for_match(title: str) -> str:
     return s
 
 
-def match_section(query: str, nodes: list[dict]) -> dict | None:
+def match_section_candidates(query: str, nodes: list[dict]) -> tuple[str | None, list[dict]]:
     """在 Section Tree 中匹配 section。
 
     匹配策略（按优先级）：
@@ -204,23 +207,32 @@ def match_section(query: str, nodes: list[dict]) -> dict | None:
     query_norm = normalize_for_match(query)
 
     # 1. 精确匹配
-    for n in nodes:
-        if n["title"].lower().strip() == query_lower:
-            return n
+    candidates = [n for n in nodes if n["title"].lower().strip() == query_lower]
+    if candidates:
+        return "exact", candidates
 
     # 2. 归一化精确匹配
-    for n in nodes:
-        if normalize_for_match(n["title"]) == query_norm:
-            return n
+    candidates = [n for n in nodes if normalize_for_match(n["title"]) == query_norm]
+    if candidates:
+        return "normalized_exact", candidates
 
     # 3. 包含匹配（双向）
     if len(query_norm) >= 3:
+        candidates = []
         for n in nodes:
             n_norm = normalize_for_match(n["title"])
             if query_norm in n_norm or n_norm in query_norm:
-                return n
+                candidates.append(n)
+        if candidates:
+            return "substring", candidates
 
-    return None
+    return None, []
+
+
+def match_section(query: str, nodes: list[dict]) -> Optional[dict]:
+    """Backward-compatible first match; strict callers use --require-unique."""
+    _, candidates = match_section_candidates(query, nodes)
+    return candidates[0] if candidates else None
 
 
 def get_ancestors(node: dict, nodes: list[dict]) -> list[dict]:
@@ -242,6 +254,18 @@ def get_top_parent(node: dict, nodes: list[dict]) -> dict:
     return current
 
 
+def node_summary(node: dict) -> dict:
+    """Return the compact node shape used by match-section outputs."""
+    return {
+        "id": node["id"],
+        "level": node["level"],
+        "cmd": node["cmd"],
+        "starred": bool(node.get("starred", False)),
+        "tex_cmd": node.get("tex_cmd", f"{node['cmd']}*" if node.get("starred") else node["cmd"]),
+        "title": node["title"],
+    }
+
+
 def cmd_match_section(args):
     """子命令: match-section"""
     tree_path = Path(args.tree)
@@ -253,10 +277,30 @@ def cmd_match_section(args):
         nodes = json.load(f)
 
     query = args.query
-    matched = match_section(query, nodes)
+    match_tier, candidates = match_section_candidates(query, nodes)
+    output_path = args.output or str(tree_path.parent / "_section_match.json")
+    if getattr(args, "require_unique", False) and len(candidates) > 1:
+        result = {
+            "query": query,
+            "matched": False,
+            "ambiguous": True,
+            "match_tier": match_tier,
+            "candidates": [node_summary(n) for n in candidates],
+        }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        print("=== SECTION MATCH ===")
+        print(f"Query: \"{query}\"")
+        print(f"AMBIGUOUS: {len(candidates)} candidates at tier {match_tier}")
+        for candidate in candidates:
+            print(f"  - L{candidate['line_no']}: {candidate['title']}")
+        print("=== VERIFY: FAIL ===")
+        print(f"Output: {output_path}")
+        sys.exit(2)
+    matched = candidates[0] if candidates else None
 
     # 构建结果
-    result = {"query": query, "matched": False}
+    result = {"query": query, "matched": False, "match_tier": match_tier}
 
     if matched:
         result["matched"] = True
@@ -264,14 +308,14 @@ def cmd_match_section(args):
 
         # 父子关系
         top = get_top_parent(matched, nodes)
-        result["top_parent"] = {"id": top["id"], "title": top["title"]}
+        result["top_parent"] = node_summary(top)
 
         ancestors = get_ancestors(matched, nodes)
-        result["ancestors"] = [{"id": a["id"], "title": a["title"]} for a in ancestors]
+        result["ancestors"] = [node_summary(a) for a in ancestors]
 
         # 子节点
         children = [nodes[cid] for cid in matched["children_ids"]]
-        result["children"] = [{"id": c["id"], "title": c["title"]} for c in children]
+        result["children"] = [node_summary(c) for c in children]
         result["has_children"] = len(children) > 0
 
         # 同级
@@ -279,7 +323,7 @@ def cmd_match_section(args):
                     if n["parent_id"] == matched["parent_id"]
                     and n["level"] == matched["level"]
                     and n["id"] != matched["id"]]
-        result["siblings"] = [{"id": s["id"], "title": s["title"]} for s in siblings]
+        result["siblings"] = [node_summary(s) for s in siblings]
 
         # preceding / following
         if matched["preceding_id"] is not None:
@@ -289,12 +333,11 @@ def cmd_match_section(args):
     else:
         # 列出所有可用 section
         result["available"] = [
-            {"id": n["id"], "level": n["level"], "title": n["title"]}
+            node_summary(n)
             for n in nodes
         ]
 
     # 输出
-    output_path = args.output or str(tree_path.parent / "_section_match.json")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -330,7 +373,30 @@ def cmd_match_section(args):
 # 功能 3: 引用池路径解析
 # ===========================================================================
 
-def extract_citation_paths(md_content: str) -> list[str]:
+def normalize_citation_path(raw_path: str, chapter_md: Optional[Path] = None) -> str:
+    """Normalize citation-pool references to project-root-relative paths."""
+    raw_path = raw_path.strip()
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return str(path)
+
+    parts = path.parts
+    if parts and parts[0] == "structure":
+        return raw_path
+    if parts and parts[0] == "2_literature":
+        return str(Path("structure") / path)
+    if parts and parts[0] == "citation_pool":
+        if chapter_md is not None:
+            md_parts = Path(chapter_md).parts
+            if "structure" in md_parts:
+                idx = len(md_parts) - 1 - list(reversed(md_parts)).index("structure")
+                rel_parent = Path(*md_parts[idx:-1])
+                return str(rel_parent / path)
+        return str(Path("structure") / "2_literature" / path)
+    return raw_path
+
+
+def extract_citation_paths(md_content: str, chapter_md: Optional[Path] = None) -> list[str]:
     """从章节 md 的 ## 引用池 区块提取路径列表。"""
     paths = []
 
@@ -346,7 +412,7 @@ def extract_citation_paths(md_content: str) -> list[str]:
 
     # 提取路径（格式：`path/to/file.md` 或 path/to/file.md）
     for m in re.finditer(r"`([^`]+\.(?:md|bib))`", block):
-        paths.append(m.group(1))
+        paths.append(normalize_citation_path(m.group(1), chapter_md))
 
     return paths
 
@@ -361,7 +427,7 @@ def cmd_citation_paths(args):
     with open(md_path, encoding="utf-8") as f:
         content = f.read()
 
-    paths = extract_citation_paths(content)
+    paths = extract_citation_paths(content, md_path)
 
     result = {
         "chapter_md": str(md_path),
@@ -429,7 +495,13 @@ def parse_bib_entries(bib_content: str) -> dict[str, str]:
 
 
 def cmd_update_bib(args):
-    """子命令: update-bib"""
+    """子命令: update-bib.
+
+    Default behavior is check-only. Project-bib mutation requires --allow-write
+    so drafting workflows cannot silently change bibliography state.
+    """
+    if not getattr(args, "allow_write", False):
+        args.dry_run = True
     # 1. 读取 draft 文件，提取 cite keys
     all_keys = set()
     draft_files = args.draft_files
@@ -566,6 +638,7 @@ def main():
     p2.add_argument("--tree", required=True, help="Path to _section_tree.json")
     p2.add_argument("--query", required=True, help="Section name to match")
     p2.add_argument("--output", default=None, help="Output JSON path")
+    p2.add_argument("--require-unique", action="store_true", help="Fail when the highest-priority match tier contains multiple candidates")
 
     # citation-paths
     p3 = sub.add_parser("citation-paths", help="Extract citation pool paths from chapter md")
@@ -573,11 +646,12 @@ def main():
     p3.add_argument("--output", default=None, help="Output JSON path")
 
     # update-bib
-    p4 = sub.add_parser("update-bib", help="Extract cite keys and update project bib")
+    p4 = sub.add_parser("update-bib", help="Extract cite keys and preview project bib updates")
     p4.add_argument("--draft-files", nargs="+", required=True, help="Draft file(s) to scan")
     p4.add_argument("--master-bib", required=True, help="Path to master.bib")
     p4.add_argument("--project-bib", required=True, help="Path to project bib file")
     p4.add_argument("--dry-run", action="store_true", help="Preview only")
+    p4.add_argument("--allow-write", action="store_true", help="Allow appending entries to project bib")
 
     args = parser.parse_args()
 

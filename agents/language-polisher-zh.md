@@ -1,6 +1,6 @@
 ---
 name: language-polisher-zh
-description: Polish the language of academic Chinese text. Two modes: (1) Pipeline — invoke after the review-revision cycle for a finalized manuscript section; (2) Ad-hoc — invoke directly to polish any Chinese text on demand. Improves academic register, coherence, sentence flow, and terminological consistency while preserving all academic content.
+description: "Polish the language of academic Chinese text. Two modes: (1) Pipeline — invoke after the review-revision cycle for a finalized manuscript section; (2) Ad-hoc — invoke directly to polish any Chinese text on demand. Improves academic register, coherence, sentence flow, and terminological consistency while preserving all academic content."
 model: opus
 tools: Read, Grep, Glob
 maxTurns: 25

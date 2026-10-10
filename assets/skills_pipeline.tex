@@ -1,0 +1,153 @@
+% !TEX program = xelatex
+% Claude Academic OS 英文论文全流程（Academic OS Lite, 2026-10-10）
+% 风格：语义极简（灰色结构 + 三种语义色）
+% 编译：xelatex skills_pipeline.tex ; pdftocairo -svg skills_pipeline.pdf skills_pipeline.svg
+\documentclass[tikz,border=8pt]{standalone}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Times New Roman}
+\setmonofont{Menlo}[Scale=0.88]
+\setCJKmainfont{Songti SC}[BoldFont=Heiti SC]
+\setCJKmonofont{Heiti SC}
+\usetikzlibrary{positioning,arrows.meta,calc,fit}
+
+\definecolor{skF}{RGB}{226,236,247}\definecolor{skD}{RGB}{38,84,140}   % 技能
+\definecolor{gaD}{RGB}{176,84,26}\definecolor{gaF}{RGB}{251,229,211}   % 需用户确认 / 回流
+\definecolor{arF}{RGB}{224,240,226}\definecolor{arD}{RGB}{46,110,62}   % 产物文件
+\definecolor{opF}{RGB}{242,242,242}\definecolor{opD}{RGB}{120,120,120} % 可选 / 辅助
+\definecolor{bandA}{RGB}{248,248,248}\definecolor{bandB}{RGB}{240,240,240}
+\newcommand{\sep}{\,$\cdot$\,}
+\newcommand{\nm}[1]{\texttt{\textbf{#1}}}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\footnotesize,
+  >={Stealth[length=2mm]},
+  sk/.style={draw=skD, fill=skF, rounded corners=2pt, align=center, text width=#1,
+             minimum height=10mm, inner sep=3pt, line width=0.55pt},
+  sk/.default=30mm,
+  gate/.style={sk=#1, draw=gaD, line width=1.1pt},
+  gate/.default=30mm,
+  op/.style={sk=#1, draw=opD, fill=opF, dashed},
+  op/.default=30mm,
+  ar/.style={draw=arD, fill=arF, align=left, text width=#1, inner sep=3pt,
+             font=\scriptsize\ttfamily, line width=0.5pt},
+  ar/.default=36mm,
+  flow/.style={->, line width=0.6pt, black!70},
+  back/.style={->, line width=0.8pt, gaD, dash pattern=on 4pt off 2pt},
+  lbl/.style={font=\scriptsize, fill=white, inner sep=1pt, text=black!70},
+  bl/.style={font=\scriptsize, fill=white, inner sep=1pt, text=gaD},
+]
+% ---------------- 阶段色带 ----------------
+\def\W{19.2}
+\foreach \ya/\yb/\c/\t in {15.2/21.9/bandA/{\textbf{foundation}\\立项与文献},
+                           12.3/15.0/bandB/{\textbf{foundation}\\研究设计},
+                            8.4/12.1/bandA/{\textbf{analysis}\\分析},
+                            1.4/8.2/bandB/{\textbf{drafting}\\写作与定稿},
+                           -1.9/1.2/bandA/{\textbf{submitted}\\\textbf{revision-R\{N\}}}}{
+  \fill[\c] (0,\ya) rectangle (\W,\yb);
+  \node[rotate=90, align=center, font=\scriptsize] at (0.55,{(\ya+\yb)/2}) {\t};
+}
+\draw[black!30] (1.1,-1.9) -- (1.1,21.9);
+\node[anchor=south west, font=\small\bfseries] at (0,22.0) {Claude Academic OS：英文论文全流程（Academic OS Lite）};
+\node[anchor=south east, font=\scriptsize, text=black!60] at (\W,22.05) {项目阶段只记录在项目 CLAUDE.md 的「项目阶段」一节};
+
+% ================= 立项与文献 =================
+\node[op=26mm] (mine) at (2.9,20.4) {\nm{/idea-mine}\\从选中的论文中\\挖掘可迁移 idea};
+\node[font=\scriptsize, text=black!60, align=center] at (2.9,21.45) {日报来源：Codex 侧 idea-scout};
+\node[sk=28mm] (init) at (6.0,20.4) {\nm{/paper-init}\\选出版社 + 方法 profile\\生成项目骨架};
+\node[gate=28mm] (plan) at (9.25,20.4) {\nm{/lit-plan}\\检索方向、WoS 检索式\\（实测命中）、配额};
+\node[op=17mm, minimum height=8mm] (scr) at (12.05,20.15) {\nm{screen}\\（可选）};
+\node[sk=13mm, minimum height=8mm] (rev) at (13.95,20.15) {\nm{review}\\筛选};
+\node[sk=13mm, minimum height=8mm] (tag) at (15.6,20.15) {\nm{tag}\\标签};
+\node[sk=13mm, minimum height=8mm] (pool) at (17.25,20.15) {\nm{pool}\\引用池};
+\node[draw=skD, rounded corners=3pt, line width=0.9pt, inner sep=5pt, fit=(scr)(rev)(tag)(pool)] (lw) {};
+\node[anchor=south west, font=\scriptsize, text=skD] at (lw.north west) {\nm{/lit-workflow}\ 唯一入口，可从任一阶段续跑（from / through）};
+\draw[flow] (scr) -- (rev); \draw[flow] (rev) -- (tag); \draw[flow] (tag) -- (pool);
+\draw[flow] (mine) -- node[lbl, above=4pt, fill=none]{idea.md} (init);
+\draw[flow] (init) -- (plan);
+\draw[flow] (plan) -- (lw.west |- plan);
+
+\node[ar=33mm] (a_init) at (6.0,17.05) {CLAUDE.md（阶段、profile）\\idea.md\\analysis\_plan.md（草稿）\\manuscript.tex 骨架};
+\node[ar=36mm] (a_plan) at (9.85,17.05) {literature\_search\_plan.md\\\_quota\_result.json\\direction\{N\}\_wos.ris\\direction\{N\}\_cnki.enw};
+\node[ar=46mm] (a_lit) at (15.75,17.05) {lit\_status.md（FAILED / SKIPPED）\\direction\{N\}\_report.md\\tagged\_reports/\\citation\_pool/\{BG,LR,GAP,METHOD,COMP,DISC\}\\master.bib\sep literature\_manifest.json};
+\draw[flow, arD] (init) -- (a_init);
+\draw[flow, arD] (plan) -- (a_plan);
+\draw[flow, arD] (lw.south -| a_lit) -- (a_lit);
+\node[font=\scriptsize, text=black!60, align=left, anchor=west] at (1.4,16.2)
+  {OpenAlex 补充文献：openalex\_to\_ris.py $\rightarrow$ direction\{N\}\_openalex.ris $\rightarrow$ 从 review 重跑（与 WoS 共用配额）};
+
+% ================= 研究设计 =================
+\node[gate=40mm] (refine) at (6.0,13.65) {\nm{/idea-refine}\\idea-reviewer 审稿：Dim5 建模\\创新、Dim6 假设逐条审查};
+\node[ar=54mm] (a_ref) at (13.2,13.65) {idea.md vX.Y\\analysis\_plan.md 第 2 节 设计基准（5--8 篇）\\analysis\_plan.md 第 7 节 变更记录【设计层】};
+\draw[flow] (refine) -- (a_ref);
+\draw[flow] (a_lit.south) -- ++(0,-0.55) -| node[lbl, pos=0.25, above=1pt]{读取带标签报告与文献清单} (refine.north);
+
+% ================= 分析 =================
+\node[gate=30mm] (aplan) at (4.0,11.15) {\nm{/analysis} Plan\\RQ $\rightarrow$ 结论目标、\\任务、检验};
+\node[sk=30mm] (arun) at (9.1,11.15) {\nm{/analysis} Run\\按方法 profile\\推导或估计};
+\node[gate=30mm] (arel) at (14.2,11.15) {\nm{/analysis} Release\\确认结果登记表完整};
+\node[font=\scriptsize, text=black!65, anchor=west] at (9.9,12.0) {profile：saom\sep panel-regression\sep survey-sem\sep analytical-model\sep \_generic};
+\draw[flow] (aplan) -- node[lbl, above=1pt]{已批准} (arun);
+\draw[flow] (arun) -- (arel);
+\node[ar=30mm] (a_ap) at (4.0,9.25) {analysis\_plan.md\\状态：approved};
+\node[ar=44mm] (a_run) at (9.1,9.25) {3\_analysis/derivation/（建模推导）\\data/scripts\sep data/results（实证）};
+\node[ar=30mm] (a_reg) at (14.2,9.25) {results\_register.md\\条目编号 F1, F2, ...};
+\draw[flow, arD] (aplan) -- (a_ap); \draw[flow, arD] (arun) -- (a_run); \draw[flow, arD] (arel) -- (a_reg);
+\node[bl, anchor=west] at (1.25,10.2) {$\rightarrow$ 阶段写为 \textbf{analysis}};
+\node[bl, anchor=west] at (16.0,10.2) {$\rightarrow$ 阶段写为 \textbf{drafting}};
+\draw[flow] (a_ref.south) -- ++(0,-0.35) -| (aplan.north);
+
+% ================= 写作与定稿 =================
+\node[gate=30mm] (tmap) at (4.0,7.15) {\nm{/technical} Map\\章节结构、段落任务、\\登记表条目、术语表};
+\node[sk=30mm] (ttex) at (8.6,7.15) {\nm{/technical} Tex\\写入\sep 对照登记表审计\\嵌入式润色\sep 编译};
+\node[ar=30mm] (a_tm) at (4.0,5.55) {technical\_map.md\\CLAUDE.md「技术章节」表};
+\draw[flow, arD] (tmap) -- (a_tm);
+\draw[flow] (tmap) -- (ttex);
+\draw[flow] (a_reg.south) -- ++(0,-0.3) -| node[lbl, pos=0.3, above=1pt]{读取登记表} (tmap.north);
+
+\node[gate=30mm] (nil) at (4.0,3.55) {\nm{/narrative} 引言 / 综述\\先写 blueprint md 并确认\\（可在 technical 之前）};
+\node[op=30mm] (bilt) at (4.0,2.15) {\nm{/build-intro-lit-table}\\引言文献表（可选）};
+\node[sk=30mm] (ndis) at (8.6,4.6) {\nm{/narrative} 讨论\\technical 完成后；\\按章节角色逐 RQ 回应};
+\node[op=30mm] (figt) at (8.6,2.75) {\nm{/figure}\sep\nm{/latex-table}\\数据只取自登记表来源};
+
+\node[ar=22mm, align=center, font=\small\ttfamily\bfseries, minimum height=16mm] (ms) at (12.7,4.6) {manuscript.tex\\[-1pt]{\scriptsize\rmfamily 唯一正文}};
+\draw[flow] (ttex) -| (ms.north);
+\draw[flow] (ndis) -- (ms);
+\draw[flow] (nil.east) -- (11.0,3.55) |- ([yshift=-4mm]ms.west);
+\draw[flow] (figt.east) -| ([xshift=-4mm]ms.south);
+\draw[flow, opD] (bilt) -- (nil);
+
+\node[op=26mm] (pol) at (17.0,7.15) {\nm{/polish}\\只改语言（可选）};
+\node[gate=26mm] (fin) at (17.0,5.15) {\nm{/finalize}\\结论\sep 摘要\sep 投稿信};
+\node[gate=26mm] (pre) at (17.0,2.6) {\nm{/pre-submit}\\引用\sep 图表\sep 术语\\精简规则\sep 日期检查};
+\draw[flow] (ms.east) -- ++(0.55,0) |- (pol.west);
+\draw[flow] (pol) -- (fin); \draw[flow] (fin) -- (pre);
+\node[bl, anchor=north] at (17.0,1.85) {$\rightarrow$ 阶段写为 \textbf{submitted}};
+
+% ================= 投稿与修改 =================
+\node[gate=30mm] (rinit) at (4.0,-0.35) {\nm{/rev-init}\\冻结基准、解析决定信\\（E / AE / R 编号）};
+\node[gate=34mm] (rresp) at (9.4,-0.35) {\nm{/rev-respond}\\两次确认：\\回复策略\sep 最终综合};
+\node[sk=26mm] (finr) at (14.6,-0.35) {\nm{/finalize}\\修订包收尾};
+\draw[flow] (rinit) -- (rresp); \draw[flow] (rresp) -- (finr);
+\node[bl, anchor=north] at (4.0,-1.25) {$\rightarrow$ 阶段写为 \textbf{revision-R\{N\}}};
+\draw[flow] (pre.south) -- ++(0,-1.1) -| (rinit.north);
+\node[op=20mm] (res) at (17.7,-0.35) {\nm{/resume}\\读阶段与日期\\给出下一步};
+
+% ================= 回流（橙色虚线） =================
+\draw[back] (arun.north) to[out=110, in=-20] node[bl, pos=0.55, right=2pt]{设计层改动} (refine.south east);
+\draw[back] (refine.south west) to[out=-120, in=120] node[bl, pos=0.6, left, align=right]{重新批准\\计划} (aplan.north west);
+\draw[back] (a_reg.south west) to[out=-140, in=40] node[bl, pos=0.55, above, sloped]{登记表重新发布 $\Rightarrow$ technical 修复} (ttex.north east);
+\draw[back] ([xshift=-3mm]rresp.north east) -- (10.85,8.0) -- (11.9,8.0) -- (11.9,10.35) -- (arun.south east);
+\node[bl, anchor=west, align=left] at (10.95,0.65) {审稿补分析（不改阶段）};
+
+% ================= 图例 =================
+\begin{scope}[shift={(1.6,-2.55)}]
+  \node[sk=6mm, minimum height=3.5mm, inner sep=0pt] at (0,0) {}; \node[anchor=west, font=\scriptsize] at (0.45,0) {技能};
+  \node[gate=6mm, minimum height=3.5mm, inner sep=0pt] at (2.0,0) {}; \node[anchor=west, font=\scriptsize] at (2.45,0) {需用户确认的技能};
+  \node[op=6mm, minimum height=3.5mm, inner sep=0pt] at (5.6,0) {}; \node[anchor=west, font=\scriptsize] at (6.05,0) {可选 / 辅助技能};
+  \node[ar=6mm, minimum height=3.5mm, inner sep=0pt] at (9.2,0) {}; \node[anchor=west, font=\scriptsize] at (9.65,0) {长期保留的产物文件};
+  \draw[back] (13.2,0) -- (14.1,0); \node[anchor=west, font=\scriptsize] at (14.2,0) {回流 / 重新进入};
+\end{scope}
+\end{tikzpicture}
+\end{document}

@@ -1,54 +1,55 @@
-# Introduction — {ID}
+# Introduction blueprint — {ID}
 
-> 对应 manuscript.tex §1 Introduction
-> 目标字数: TBD（由 /method-audit 基于 benchmark 确定，/narrative 分配各子节字数）
-
----
-
-## 必备元素
-
-1. **行业背景与实践难题**: 宏观情境 → 引出研究主题 → 点出该主题下的总体性实践挑战。注意：只谈主题层面的 general 问题，不展开到具体 RQ 对应的子问题——具体子问题由下方各 Gap 段落分别展开（需BG标签文献支撑）
-2. **Gap段落×N**: 每个 Gap 对应一个段落，内部结构为5步：
-   - ①**引子**：从上一段自然过渡，引出本Gap所涉及的研究方向（1句）
-   - ②**已有成果**：这个方向已经做了什么、发现了什么（2-3句）
-   - ③**Gap**：但还没做什么（1-2句）
-   - ④**So what**：不解决这个Gap会带来什么问题/负面影响（1-2句）
-   - ⑤**目标**：因此本文旨在做什么（**陈述句**，如"因此，本文旨在构建..."），对应RQ但不是RQ问句本身（1句）。RQ问句在"方法论概述与RQ"子节中统一列出。
-     - ❌ 错误：`因此，本文提出RQ1：如何设计...？` ← 这是直接引用RQ问句
-     - ✅ 正确：`因此，本文旨在构建面向X的Y框架` ← 这是陈述目标
-   Gap数量 = RQ数量（一对一映射）。每个 Gap heading 标注对应的 RQ 编号（如 `Gap1（→RQ1）`）。需GAP标签文献支撑
-3. **方法论概述与RQ**: 说明用什么方法来实现研究目标 + 显式编号列出所有RQ（与Gap一一对应）
-4. **贡献**: 方法/理论贡献 + 实践贡献预告（与idea.md §4一致）
-5. **论文结构**: 末尾一段概述剩余章节安排
+> 对应 manuscript.tex 的 `\section{Introduction}`。本文件是逻辑合约，不是正文：`/narrative section=introduction` 先更新本文件并经用户确认，再写入 tex。
+> 状态: draft（用户确认后改为 confirmed（YYYY-MM-DD））
+> 软预算: TBD（实证论文 2–4 个 RQ 约 950–1200 词起步；按 RQ 数量、证据负担和目标期刊调整）
 
 ---
 
-## 大纲
+## 1 功能链（Introduction 不设 \subsection，按连续功能块写作）
 
-> **填写说明**：每个子标题下用 `> ` 写一句话意图（这块要论证什么），然后在下方补充要点。
-> Gap段落的数量和标题由 /narrative 根据 idea.md 的RQ数量动态生成。
+`实践难题 → 相关层级桥接 → Gap–Aim 单元 × N → 研究对象 / 设计 → 方法适配 → 理论镜头及边界 → RQs → 论文结构`
 
-### 行业背景与实践难题
-> TODO
+## 2 实践难题与层级桥接
 
-### Gap1（→RQ1）
-> TODO: ①引子 → ②已有成果 → ③Gap → ④So what → ⑤目标（陈述句"因此本文旨在..."，非RQ问句）
+> 谁（行动者）面对什么具体管理问题；为什么需要进入关系 / 网络 / 系统等正确的分析层级
+- TODO
 
-### Gap2（→RQ2）
-> TODO: ①引子 → ②已有成果 → ③Gap → ④So what → ⑤目标（陈述句"因此本文旨在..."，非RQ问句）
+## 3 Gap–Aim 单元
 
-### 方法论概述与RQ
-> TODO: 方法选择论证 + 显式编号列出RQ
+> 每个单元 5 步：问题面向 → 已有知识（引用）→ 设计层面的具体不足（不写"无人研究"）→ 后果（so what）→ 陈述句目标（不写 RQ 问号）
+> 每个目标至少映射一个 RQ；不强制一一对应。
 
-### 贡献
-> TODO: 方法/理论贡献N个 + 实践贡献N个（与idea.md §4一致）
+### Gap–Aim 1（→ RQ?）
+- 问题面向: TODO
+- 已有知识 + 引用键: TODO
+- 具体不足: TODO
+- 后果: TODO
+- 目标（陈述句）: TODO
 
-### 论文结构
-- "The remainder of this paper is organized as follows..."
+### Gap–Aim 2（→ RQ?）
+- TODO
 
----
+## 4 研究设计、理论镜头与 RQ
 
-## 引用池
-- **[主] BG** → 见 `2_literature/citation_pool/BG.md`
-- **[主] GAP-RQx** → 见 `2_literature/citation_pool/GAP.md`
-- **[次] LR** → 见 `2_literature/citation_pool/LR.md`
+- 研究对象与行动者边界、情境、样本 / 时期: TODO
+- 方法及其适配理由: TODO
+- 理论镜头及其不能直接测量或证明的内容: TODO
+- RQ 列表（与 idea.md §2 逐字一致）:
+  - RQ1: TODO?
+  - RQ2: TODO?
+
+## 5 论文结构 / 贡献预告
+
+- 论文结构段: "The remainder of this paper is organized as follows..."
+- 独立贡献预告段: 不需要（仅当目标期刊惯例或用户要求时改为"需要"）
+
+## 6 引用计划（按论断角色）
+
+| 功能块 | 论断 | 引用键 | 来源池 |
+|---|---|---|---|
+| TODO | TODO | TODO | BG / GAP / LR |
+
+## 7 不得推断（受保护边界）
+
+- TODO（如：不声称因果、不提前泄露结果方向）

@@ -160,7 +160,10 @@ def extract_citations_by_section(tex_content: str, rq_count: int = 2
             continue
 
         # 提取引用命令：\cite, \citep, \citet, \citeN, \parencite, \textcite
-        cite_pattern = r'\\(?:cite[pt]?|citeN|parencite|textcite)\{([^}]+)\}'
+        # 支持 natbib/biblatex optional args:
+        #   \citep[see][p. 4]{key}
+        #   \parencite[12]{key}
+        cite_pattern = r'\\(?:cite[pt]?|citeN|parencite|textcite)(?:\[[^\]]*\]){0,2}\{([^}]+)\}'
         for cm in re.finditer(cite_pattern, line):
             keys_str = cm.group(1)
             # 分割多 key：\citep{key1,key2,key3}
@@ -359,19 +362,23 @@ def main():
     papers = []
     raw_keys = {}  # dedup_key → raw citation key
     key_to_source = {}  # dedup_key → source cite key
+    missing_cited_keys = []
+    no_year_keys = []
 
     for source_key, contexts in citation_map.items():
         if source_key not in bib_entries:
-            print(f"  WARNING: cited key '{source_key}' not found in bib",
+            print(f"  ERROR: cited key '{source_key}' not found in bib",
                   file=sys.stderr)
+            missing_cited_keys.append(source_key)
             continue
 
         entry = bib_entries[source_key]
         meta = extract_bib_metadata(entry)
 
         if meta["year"] == 0:
-            print(f"  WARNING: no year for '{source_key}', skipping",
+            print(f"  ERROR: no year for '{source_key}'",
                   file=sys.stderr)
+            no_year_keys.append(source_key)
             continue
 
         # 生成 citation key（传完整作者名，函数内部会提取姓氏）
@@ -426,7 +433,7 @@ def main():
     # 5. 构建 key 映射
     key_map = {p["source_cite_key"]: p["new_cite_key"] for p in papers}
 
-    # 6. 输出 JSON
+    # 6. 输出 JSON（先构建，校验通过后再落盘）
     output_data = {
         "source_project": source_bib_path.stem,
         "source_bib": str(source_bib_path),
@@ -438,11 +445,6 @@ def main():
         "key_map": key_map,
         "uncited_keys": uncited_keys[:20],  # 仅列前 20 个
     }
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
 
     # ===== stdout 结构化摘要 =====
     print("=== SOURCE BIB TO POOL ===")
@@ -466,6 +468,12 @@ def main():
 
     # 校验
     errors = []
+    if missing_cited_keys:
+        sample = ", ".join(missing_cited_keys[:10])
+        errors.append(f"MISSING_CITED_KEYS: {len(missing_cited_keys)} cited keys missing from bib ({sample})")
+    if no_year_keys:
+        sample = ", ".join(no_year_keys[:10])
+        errors.append(f"NO_YEAR: {len(no_year_keys)} cited bib entries lack a 4-digit year ({sample})")
     if len(papers) == 0:
         errors.append("NO_PAPERS: No cited papers found")
     no_tags = [p for p in papers if not p["tags"]]
@@ -476,8 +484,14 @@ def main():
         print("=== VERIFY: FAIL ===")
         for e in errors:
             print(f"  ❌ {e}")
+        print("Output not written; repair source bib/manuscript consistency first.")
         sys.exit(1)
     else:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = output_path.with_name(output_path.name + ".tmp")
+        tmp_path.write_text(json.dumps(output_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(output_path)
         print("=== VERIFY: PASS ===")
         print(f"Output: {args.output}")
 

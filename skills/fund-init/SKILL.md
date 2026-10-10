@@ -91,7 +91,7 @@ description: "初始化基金申请项目：关联源项目 + 按基金类型选
 ├── structure/                         ← 与通用 skill（lit-*、figure、latex-table）对齐的共享目录
 │   ├── 0_global/
 │   │   └── idea.md                    ← 从 fund-idea.md 复制，供 /lit-plan 读取
-│   ├── 2_literature/                  ← /lit-plan、/lit-review 工作目录
+│   ├── 2_literature/                  ← /lit-plan、/lit-workflow 工作目录
 │   └── figures_tables/
 │       ├── figures/                   ← /figure 输出
 │       └── tables.tex                 ← /latex-table 输出

@@ -1,295 +1,174 @@
 ---
-description: "交互式打磨已有论文段落（Pipeline：[Writing Brief 可选] → strict-reviewer → 用户确认 → 主agent直接修改 → language-polisher）。Writing Brief 改为可选——存在则复用，不存在则跳过，不强制 journal-scout。"
+description: "仅对已有学术 LaTeX 文本做英文语言润色。用于用户要求 polish、润色、简化或提升英文自然度时；也可被 technical / narrative 以嵌入模式调用（只返回候选文本）。不得修改研究逻辑、结构、论断强度、引用、数据、公式、标签或段落顺序。目标章节唯一时自动校验、写回并编译，不展示 diff，不要求二次确认。"
 ---
 
-# Polish Workflow — 交互式打磨已有文本
+# Polish — 自动化 language-only 润色
 
-调用 agent 对已有文本进行质量提升。与 Draft 不同，Polish 保持原文逻辑结构，不从零撰写。
+> 规格：`~/.claude/skills/shared/ACADEMIC-OS-LITE.md`（冲突以规格为准）。正文精简规则：`~/.claude/skills/shared/MANUSCRIPT-ECONOMY.md`。
+> 子 agent：可以在需要时使用子 agent（定义在 `~/.claude/agents/`），并在执行前告诉用户将派出哪些。
+> Git：本技能不 stage、不 commit、不 push。
 
-**核心特征**：
-- **不拆分 subsection**：无论输入包含多少 `\subsection`，都作为一个整体交给 reviewer
-- **交互式审稿**：reviewer 给出编号意见 → **用户逐条确认** → 主 agent 生成修改方案并执行用户确认的意见
-- **Citation 保护**：不得增删改任何 citation key 和引用形式
+Polish 只改善作者已经定稿的学术英文，不承担 peer review、理论修改、结构重组或期刊定位。
 
-**输入** `$ARGUMENTS`：用户选中的已有文本（LaTeX），可选 `section=XXX`。空或 < 50 字符 → 停止提示用户选中文本。
+生成或审计候选文本前读取 `~/.claude/skills/shared/MANUSCRIPT-ECONOMY.md`。Polish 不得新增 hedge、caveat、concession、limitation 或防御性句子；只有删除严格不改变含义时才可去掉重复，否则保留原文并把实质性精简问题报告给调用方。
 
-## 步骤 0：前置准备
+## 范围
 
-### 0.1 解析 `$ARGUMENTS`
+仅可修改：
 
-- 提取主体内容和 `section` 参数
-- 空或 < 50 字符 → 停止，提示用户选中文本
-- **可选标志 `with_brief=true`**：语义为"**强制重新生成** Writing Brief"开关，不是"是否使用"开关。
-  - `with_brief=true` → 设置 `{WITH_BRIEF}` = true，步骤 1 强制调用 journal-scout 重新生成 brief（无论原 brief 是否存在/过期）
-  - `with_brief=false` 或参数缺省 → 设置 `{WITH_BRIEF}` = false，步骤 1 走默认"已存在则复用，不存在则跳过"逻辑（即"使用现有 brief"是默认行为，不需要显式开关）
+- grammar、articles、punctuation、agreement 和 tense consistency；
+- collocation、concision、sentence length、readability 和 local flow；
+- pronoun clarity、parallelism、terminology consistency；
+- Chinglish、冗余 nominalization / passive voice、em-dash misuse 和 lexical hyphenation。
 
-### 0.2 获取项目文件路径
+绝对不得修改：
 
-- 从 CLAUDE.md 获取主文件和 bib 文件路径
-- Fallback：Glob("*.tex") 查找含 `\documentclass` 的文件（排除 supplementary/appendix/*.cls）
-- 读取主文件了解论文结构
+- RQ、hypothesis、theory、mechanism、interpretation、contribution 或 claim strength；
+- 段落顺序/边界、标题、列表、表图、caption、footnote 或 LaTeX environment；
+- citation command/key/order、label、reference、formula、symbol、number、year、sample size、coefficient 或 p-value；
+- 已定义术语、model name、code identifier、data boundary 或 analytical decision。
 
-### 0.3 构建 Section Tree（Python 脚本）
+不运行任何 reviewer agent 或 `journal-scout`，不生成或依赖 Writing Brief。目标期刊和项目规范从项目合同 `CLAUDE.md` 与 manuscript 中读取。
 
-**由 Python 脚本自动完成**：
+## 术语表（canonical terminology contract）
+
+若项目存在 `structure/0_global/technical_map.md`，读取其第 2 节"术语表"（术语｜定义｜不得混用的近义词），作为本次润色的约束性术语合同：
+
+- 每个术语按表中写法原样保留，不为词汇多样性替换；
+- 表中"不得混用的近义词"不得出现在候选文本中；源文本已经出现的，只报告，不在润色中替换（替换可能改变含义，属于调用方或作者的决定）；
+- 两个权威位置（术语表与 manuscript 正式定义）含义冲突时，停止并报告，不按文风择一。
+
+嵌入模式下若调用方已提供术语合同，以调用方提供的为准；未提供时同样读取上述术语表。文件不存在时，以 manuscript 中的正式定义与用户确认的措辞为准。
+
+## 使用的子 agent
+
+- `~/.claude/agents/language-polisher.md`：生成 language-only candidate；
+- `~/.claude/agents/language-auditor.md`：三个并行 audit groups。
+
+调用方式：Agent 工具，`subagent_type` 取角色名（如 `language-polisher`、`language-auditor`）。执行前告诉用户本次将派出 1 个 language-polisher 与 3 个 language-auditor（两轮审计）。
+
+处理 lexical hyphenation 前，主 agent 与两个角色均须完整读取 `~/.claude/skills/polish/references/hyphenated-compound-policy.md`，并把该绝对路径写入 prompt。
+
+## 授权与交互
+
+用户明确要求润色一个可唯一定位的章节或精确 passage，即授权在全部 gates 通过后自动写回该目标。不展示 diff、不逐条征求意见、不要求第二次写入确认。
+
+仅在下列情况暂停：
+
+- target file/section 无法唯一定位；
+- 输入无法与 source 唯一匹配；
+- output protocol 或 protected-content gate 连续两次失败；
+- 写入后的 manuscript 无法编译；
+- 修复语言必须先做实质性研究判断。
+
+### 嵌入模式（`POLISH_EMBEDDED_CANDIDATE_ONLY`）
+
+`technical` 或 `narrative` 在已完成语义审计的内存草稿上，可以携带 token `POLISH_EMBEDDED_CANDIDATE_ONLY` 调用本流程。此模式下：
+
+- 所给草稿即 exact source block；调用方保留全部研究内容、用户确认、展示与写回决定；
+- 调用方标明来源为 Results 或 Discussion 时，生成候选前先做下文"空洞表述预检"；语法正确不等于读者可读；
+- 调用方提供的术语合同与用户保护片段是约束性输入；保留每个首选术语，遇到含义冲突时报告，不自行选同义词；
+- 生成候选前用 `mktemp -d` 建一个本次专用临时目录，供步骤 4 存放 source/candidate；`EMBEDDED-PASS` 或安全报告失败后删除；若校验状态无法安全恢复，保留并报告路径；
+- 跳过目标定位、baseline 编译、写回、写后编译与独立收尾；只执行步骤 2–4（候选生成、语言审计、fidelity 校验）；
+- 向 polisher 与 auditors 传 `POLISH_AUTOMATED_LANGUAGE_ONLY`，使全部 protected-content 规则继续生效；
+- 向调用方返回完整候选、原/新字数、语言审计状态、术语合同状态与 fidelity 状态，编译报告为 `N/A`；
+- 不回调调用方、不递归调用 /polish、不创建持久产物，也不把嵌入调用视为编辑任何项目文件的授权。
+
+嵌入失败时把控制权交还调用方，不展示也不写入候选。若修复需要理论、构念、估计量或其他实质选择，返回 `FAIL-BLOCKED`，不得当作语言问题处理。
+
+### 空洞表述预检（仅嵌入模式的 Results / Discussion）
+
+**定义**：熟悉该领域、但不熟悉建模或估计软件的读者，读一遍后仍无法说出"谁（主体/单位）、什么结果或过程、方向如何、相对于什么比较"，因为句子的主要结论由模型内部对象、符号或谓词承载——这类句子是"空洞表述"（只有符号没有含义）。
+
+**信号词来源**：读取项目所用 analysis profile 的"空洞表述信号"小节：
+
+1. profile 名称取自项目合同 `CLAUDE.md` 的"方法 profile"字段；缺失时取 `structure/0_global/analysis_plan.md` 状态行的 `profile: <name>`；
+2. 读取 `~/.claude/skills/analysis/profiles/<name>.md` 的"空洞表述信号"小节；
+3. 找不到对应 profile 文件或小节时，改用 `~/.claude/skills/analysis/profiles/_generic.md` 的同名小节，并在返回给调用方的状态中提醒"未找到 profile <name>，已使用 _generic"；`_generic.md` 也不可用时，只按上面的定义判断，并同样提醒。不因此停止流程。
+
+信号词只是线索，不是全局禁用词：Methodology 中的定义与紧凑的技术限定语照常润色。不得在 polish 内把空洞句"翻译"成实质句——这可能改变估计量、条件、时间范围或命题边界。发现空洞表述时返回：
+
+`FAIL-BLOCKED: SOURCE-OPAQUE — <exact sentence>; missing/obscured reader-facing elements: <actor/unit, outcome/process, direction, comparator>. Caller must rewrite the semantic source.`
+
+调用方须先写出"实质在前"的语义源文本，并核对它与 results_register 中对应条目的含义一致，才可重新提交。若源文本已清楚、模型内部用语只是限定语，则正常继续。
+
+## Workflow
+
+### 1. 定位目标（独立模式）
+
+1. 读取项目合同 `CLAUDE.md`，获得 main TeX、target journal 和编译命令。
+2. 接受 section title、exact selected passage 或可唯一匹配的 LaTeX block。除非 section title 能唯一定位，否则少于 50 characters 的输入停止。
+3. section 定位使用 `~/.claude/skills/shared/tex_section.py`：先用 `mktemp -d` 创建临时目录，再运行 `section-tree` 与 `match-section`，显式传入 `--output "$tmp/_section_tree.json"` 和 `--output "$tmp/_section_match.json" --require-unique`；不得在项目中创建 section JSON、`final.md` 或 polish 工作目录。helper 返回的 match 只是候选，不是唯一性证明；枚举同一匹配优先级的全部标题，只有一个候选时才继续。
+4. 捕获 exact source block。可读取相邻上下文判断 transition，并读取 manuscript 中正式定义目标所用理论、构念、主体、时期、估计量和缩写的位置；结合上文"术语表"组装本次术语合同。editable scope 不得越出该 block。
+5. project-connected 目标先编译一次未修改的 manuscript，检查 baseline log 中的 LaTeX errors、undefined citations/references、duplicate labels、`Float too large` 和 `Emergency stop`。存在任一问题则停止润色，因为无法区分写回后的 regression 与既有故障。
+
+raw text 不对应项目文件时，跳过 source matching、baseline 编译、写回和写后编译；执行相同的 language / fidelity gates；未给期刊时按 general academic English 处理，只返回文本，编译报告为 `N/A`。
+
+### 2. 生成候选
+
+嵌入模式的 Results / Discussion 输入，先完成空洞表述预检；失败立即交还控制权，不生成、不展示候选，也不得因 fidelity 保持而给出 `EMBEDDED-PASS`。
+
+调用一个 `language-polisher`，提供：
+
+- mode token `POLISH_AUTOMATED_LANGUAGE_ONLY`；
+- exact source block、section title 和 position；
+- target journal；
+- language-only scope 与全部 protected-content rules；
+- 术语合同（首选术语、需区分的含义、不得混用的近义词、用户保护片段），如有；
+- hyphenated-compound policy 与 `MANUSCRIPT-ECONOMY.md` 的绝对路径，以及"不得新增防御性限定"的禁令；
+- 默认 word-count tolerance ±10%。
+
+输出必须包含：一个完整非空的 `latex` code block、简短的内部 Change Summary、policy 要求的 Hyphenated Compound Ledger、candidate word count。解析失败时只重试一次输出协议；再次失败为 `FAIL-BLOCKED`。
+
+### 3. 并行语言审计
+
+对同一 source、candidate、ledger 与术语合同并行调用三个 `language-auditor`，每次都传入 `POLISH_AUTOMATED_LANGUAGE_ONLY`：
+
+- Group 1：grammar and sentence mechanics；
+- Group 2：structural language patterns、dashes 和 lexical hyphenation；
+- Group 3：terminology、reference clarity、consistency 和 local flow。
+
+Group 3 必须对照所给术语合同，而不是只以最近一次出现为准。使用了不得混用的近义词、改变理论角色或合并了需区分的构念，即使语法正确，也记为 `SOURCE-DRIFT`。
+
+Auditors 不审查研究逻辑，不建议修改 protected content。每条 issue 必须包含 location、Exact、Replacement、confidence 和 semantic-risk。主 agent 只自动应用 `HIGH` confidence、`semantic_risk: no`、其 `Exact` 能在当前 candidate 中唯一匹配、且 Replacement 不与其他已接受修复重叠或冲突的建议。相同建议去重；冲突时保留 polisher candidate。其余保留原文，不询问用户。
+
+每个 auditor 先比较 source 与 candidate：scope、modality、causality、temporal meaning、construct meaning、claim strength 或 protected artifact 的附着关系任何漂移，以 `SOURCE-DRIFT` 报告并给出 source 中的 exact restoration；主 agent 必须先恢复。
+
+合并已接受建议并恢复 drift 后，对 merged candidate 再并行运行一次三个 auditor。任一轮中某个输出格式错误，只允许该 auditor 修复一次 output protocol；第二次仍错为 `FAIL-BLOCKED`。final audit 后不再自动应用新建议；final audit 存在 `SOURCE-DRIFT` 或仍未修复的 `HIGH`、`semantic_risk: no` defect 时阻断写回。MEDIUM / LOW 的风格偏好不阻断，也不开启开放式审稿循环。
+
+### 4. Fidelity gate
+
+将 source 与 final candidate 写入临时目录，执行：
 
 ```bash
-python3 ~/.claude/skills/shared/tex_section.py section-tree --tex {主文件路径}
+python3 ~/.claude/skills/polish/scripts/validate_fidelity.py \
+  --before <source.tex> --after <candidate.tex> --max-word-change 0.10
 ```
 
-输出 `_section_tree.json`。VERIFY 必须为 PASS。
+必须通过 citations、references、labels、headings、environment order、protected table/figure environments、captions、footnotes、math、numbers、acronyms、protected identifiers、paragraph count、brace balance 和 word-count tolerance。
 
-### 0.4 定位 Section（Python 脚本 + 主 Agent）
+失败时仅允许同一 polisher 做一次 fidelity repair；随后完整重复步骤 3 的有界审计序列并重跑 validator。仍失败则不写入。
 
-从输入文本中提取 section 命令，或使用 `section=XXX` 参数：
+嵌入模式到此把已校验的候选返回调用方，跳过步骤 5–6；调用方须在展示或写入前运行自己的语义 / 技术回归审计。
 
-```bash
-python3 ~/.claude/skills/shared/tex_section.py match-section \
-  --tree _section_tree.json --query "{section标题}"
-```
+### 5. 自动写回与编译（独立模式）
 
-从 `_section_match.json` 读取匹配结果。记录 `{SECTION_TITLE}` 和位置信息。**不拆分**——整体处理。
+全部 gates 通过后：
 
-### 0.5 字数基准
+1. 用 Edit 工具 仅替换捕获的 source block；
+2. 立即运行项目要求的 LaTeX 编译；
+3. 检查 LaTeX errors、undefined citations/references、duplicate labels、`Float too large` 和 `Emergency stop`。
 
-- 原文字数 → `{ORIGINAL_WORD_COUNT}`
-- 目标字数 = 原文字数 ± 10%
+编译失败时只恢复本次捕获的 exact source block（同样用 Edit 工具 ），不使用 `git restore` 等大范围回滚；随后重新编译一次确认恢复成功，并报告 `FAIL-BLOCKED`。exact restoration 或 recovery 编译失败时，明确报告并停止。
 
-### 0.6 创建工作目录 + 保存原文
+### 6. 收尾（独立模式）
 
-**`normalize(title)`**：空格→下划线，Capitalized_Words 风格，> 40 字符在最后完整单词边界截断。
+只报告：target file/section、原/新字数、语言审计结果、术语合同状态、fidelity 校验结果、编译结果、是否完成自动写回或已在失败后恢复、git actions（`none`）、未解决的 blocker。
 
-创建 `{WORK_DIR}`，保存原始文本 → `{WORK_DIR}/01_original_text.md`
+不展示 diff，不保留持久 polish 产物。只有在 `PASS` 或确认恢复成功后，才清理本次创建的临时目录；若 restoration 或 recovery 编译失败，保留 source snapshot 并报告其绝对路径。
 
-## 步骤 1：Writing Brief（可选）
+## 通过标准
 
-**新工作流不再依赖 Writing Brief**——`/narrative` 和 `/technical` 直接 tex→tex，不预生成 brief。本步骤按 `{WITH_BRIEF}` 标志（步骤 0.1 解析）和 `drafts/writing_brief.md` 存在性分支：
+独立 `PASS`：英文自然度提升、protected content 完全不变、修改未越出授权范围、manuscript 无新增编译硬错误。
 
-| `{WITH_BRIEF}` | brief 文件状态 | 行为 | 显示 |
-|:---:|:---|:---|:---|
-| false | 存在 + 未过期（≤24h, 字数变化 ≤20%） | 复用 brief 作为下游 prompt 的可选参考 | `📄 复用 drafts/writing_brief.md（{journal name}）` |
-| false | 不存在 / 过期 | 跳过本步骤，下游 prompt 中的 `If brief exists, read it` 条件会自动跳过 | `ℹ️ 跳过 Writing Brief（润色基于 idea.md + 章节上下文，不依赖期刊画像）` |
-| true | 任意 | 强制重新生成：Web 搜索期刊 Guide for Authors → 调用 journal-scout → 保存到 `drafts/writing_brief.md` | 生成中：`🔍 正在生成 Writing Brief（搜索期刊 Guide for Authors → journal-scout）...`<br/>完成：`✅ Brief 已生成: drafts/writing_brief.md（{journal name}）` |
-
-## 步骤 2：第1轮审稿
-
-### 2.1 strict-reviewer 审稿
-
-调用 strict-reviewer（`subagent_type: "strict-reviewer"`），prompt 要素：
-
-```
-If `drafts/writing_brief.md` exists, read it for journal conventions and style guidance (Journal Profile section for aesthetic preferences). If absent, proceed without journal-specific tuning — base recommendations on general top-tier conventions.
-
-Read `structure/0_global/idea.md` for the research context (Gap/RQ/contributions).
-
-## Section: {SECTION_TITLE}
-## Position in paper: {一句话位置描述，如 "Literature review, between Introduction and Methodology"}
-## Mode: Polish — give numbered improvement suggestions only
-
-## Text to Review
-Read `{WORK_DIR}/01_original_text.md`
-
-## Review Instructions
-- Output a NUMBERED list of specific, actionable improvement suggestions
-- Each suggestion must reference the specific paragraph it applies to
-- Focus on:
-  - **Language**: clarity, sentence structure, academic tone, word choice precision
-  - **Logic coherence**: paragraph-to-paragraph transitions, argument progression, no logical jumps between claims, no missing intermediate steps in reasoning chains
-  - **Cross-subsection coherence**: whether subsections connect naturally, whether the overall narrative has a clear arc from beginning to end
-  - **Domain grounding**: arguments grounded in the specific industry context, not generic theory that could apply to any field
-- 引用相关建议仅作参考，不纳入本轮必改项。Focus on prose quality, argumentation, and logical flow.
-- Do NOT give an overall verdict (accept/reject/revise) — just list concrete suggestions
-- Word count reference: {ORIGINAL_WORD_COUNT} (target ± 10%)
-
-## Output Format
-1. [Para X] {issue description} → Suggestion: {specific fix}
-2. [Para X] {issue description} → Suggestion: {specific fix}
-...
-```
-
-保存审稿意见 → `{WORK_DIR}/02_review_r1.md`
-
-### 2.2 用户确认
-
-将审稿意见展示给用户，AskUserQuestion：
-
-```
-📋 第1轮审稿意见（共 N 条）：
-
-1. [Para X] {issue} → {suggestion}
-2. [Para X] {issue} → {suggestion}
-...
-
-请选择要执行的意见：
-- 接受：输入编号（如 "1,3,5" 或 "all"）
-- 拒绝：输入 "reject 2,4"
-- 修改某条：输入 "3: 改为..."
-```
-
-用户确认后，生成确认清单。保存 → `{WORK_DIR}/02_confirmed_r1.md`
-
-### 2.3 生成具体修改方案
-
-基于用户确认的意见和偏好，主 agent 生成**具体修改方案**——逐条列出"把哪句话改成什么"：
-
-```
-📝 修改方案（共 M 条）：
-
-1. [对应意见#1]
-   原文: "originated from descriptive social network analysis"
-   改为: "has its roots in descriptive social network analysis, which..."
-
-2. [对应意见#3]
-   原文: "Despite these advances, a gap remains between the two streams"
-   改为: "Despite these advances, a gap remains between project-level SAOM studies and industry-level cross-sectional analyses"
-
-...
-```
-
-AskUserQuestion：确认修改方案，或调整某条的具体措辞。
-
-### 2.4 执行修改
-
-用户确认方案后，主 agent 直接使用 Edit 工具逐条执行修改（不调用 sci-writer agent）。修改时严格遵守：
-- **只改方案中列出的内容**，不做额外改动
-- **不动任何 citation key 和引用形式**
-- 保留所有数据、数字和事实性表述
-
-保存修改版 → `{WORK_DIR}/03_revision_r1.md`
-
-## 步骤 3：第2轮审稿（可选）
-
-### 3.1 询问用户
-
-AskUserQuestion：
-```
-第1轮修改完成。是否进行第2轮审稿？
-(1) 进行第2轮
-(2) 跳过，直接进入语言润色
-```
-
-用户选 (2) → 直接进入步骤 4。
-
-### 3.2 第2轮审稿-确认-修改
-
-如果用户选 (1)：
-
-**3.2a strict-reviewer 审稿**：同步骤 2.1 逻辑，待审文本改为 `{WORK_DIR}/03_revision_r1.md`，标注"第2轮"。保存 → `{WORK_DIR}/04_review_r2.md`
-
-**3.2b 用户确认**：同步骤 2.2。保存 → `{WORK_DIR}/04_confirmed_r2.md`
-
-**3.2c 生成修改方案 + 用户确认**：同步骤 2.3，基于用户确认的第2轮意见生成具体修改方案，用户确认后执行。
-
-**3.2d 执行修改**：同步骤 2.4，主 agent 直接修改 `03_revision_r1.md` 的内容。保存 → `{WORK_DIR}/05_revision_r2.md`
-
-## 步骤 4：language-polisher 最终润色
-
-调用 language-polisher（`subagent_type: "language-polisher"`），prompt 要素：
-
-```
-If `drafts/writing_brief.md` exists, read it for journal conventions and style guidance (refer to Journal Profile for tone and style). If absent, proceed without journal-specific tuning.
-
-## Section: {SECTION_TITLE}
-## Mode: Language polish (final step after review cycles)
-
-## Text to Polish
-Read `{WORK_DIR}/{最新版本}`
-（如果跑了第2轮 → 05_revision_r2.md；否则 → 03_revision_r1.md）
-
-## Instructions
-- Improve grammar, coherence, sentence flow, and naturalness
-- Preserve all academic content, arguments, and structure
-- Do NOT restructure paragraphs or change argument order
-
-## Citation Protection (CRITICAL)
-- Do NOT add, remove, or change any citation key in \citet{} or \citep{} commands
-- Do NOT change citation form (\citet → \citep or vice versa)
-- Preserve all `(ref)` markers and existing citations exactly as they are
-
-## Constraints
-- Word target: {ORIGINAL_WORD_COUNT} ± 10%
-- Do NOT use \textbf{}
-- Record all changes in a Change Summary at the end
-
-## Output
-1. Complete polished LaTeX content in a ```latex``` code block
-2. Change Summary: list of language improvements made
-3. Actual word count
-```
-
-保存润色版 → `{WORK_DIR}/06_polished.md`
-
-## 步骤 4.5：language-auditor 系统审查
-
-从 `06_polished.md` 提取润色后的 LaTeX 文本，**并行**调用 3 个 language-auditor（`subagent_type: "language-auditor"`），每个负责一组审查项：
-
-```
-FOR EACH group IN [1, 2, 3] (PARALLEL):
-  Agent(
-    subagent_type: "language-auditor",
-    prompt: """
-    Audit the following polished text. Your assigned group is **Group {group}**.
-    ONLY check items in Group {group}. Report every item, even if 0 issues.
-
-    ## Polished Text
-    {polished LaTeX text from 06_polished.md}
-    """
-  )
-END FOR
-```
-
-收集 3 个 auditor 的报告后：
-
-1. **汇总 issues**：合并 3 份报告中 issues found > 0 的条目
-2. **展示给用户**（AskUserQuestion）：
-   ```
-   🔍 Language Audit 完成（3 组并行）：
-   - Group 1 (Sentence Mechanics): {N} issues
-   - Group 2 (Structural Patterns): {N} issues
-   - Group 3 (Consistency & Flow): {N} issues
-
-   {列出每条 issue 的 ID + 原文 + 建议修改}
-
-   是否应用这些修改？(yes/no/选择性应用)
-   ```
-3. **用户确认后**：主 agent 将 auditor 建议的修改应用到 `06_polished.md`，保存更新版
-
-## 步骤 5：生成输出文件
-
-### 文件 1：`{WORK_DIR}/final.md`
-
-从 `06_polished.md` 提取 ` ```latex``` ` code block，写入 `final.md`（本身即 markdown 文件，无需外层 fence 包裹）。内容结构：
-
-    # {Section Title} — Polished Version
-
-    > Ready to copy · Replaces original text in manuscript.tex
-
-    ```latex
-    {LaTeX content}
-    ```
-
-    **Target location**: manuscript.tex, {section position}
-    **Word count**: {original} → {final}
-    **Review rounds**: {1 或 2}
-
-### 文件 2：`_latest_final.md`（便捷入口）
-
-`drafts/{SECTION_NAME}_latest_final.md`，复制 `final.md` 内容，已存在则覆盖。
-
-## 步骤 6：完成提示
-
-显示：
-- ✅ 完成状态
-- 📂 工作目录路径 / 便捷入口路径
-- 字数变化：{original} → {final}
-- 审稿轮数：{1 或 2}
-- Checkpoint 文件清单
-- ⚠️ **写入前硬门槛**（全局 CLAUDE.md 安全红线："严禁未经确认就修改文件"）：
-  1. 向用户展示 `final.md` 的 LaTeX content 全文（或 diff 相对于原段落）
-  2. `AskUserQuestion`："是否把此润色版本写入 manuscript.tex 对应位置？" 选项：
-     - `(1) 是，全部写入` → 执行写入逻辑
-     - `(2) 取消` → 保留 `final.md` 供用户手动粘贴，不碰 manuscript.tex
-  3. 用户选 (1) 后才用 Edit 工具写入
-- 定位策略：**按 section 标题语义匹配（非行号）**——`old_string` = manuscript.tex 中 `\section{SECTION_NAME}` 至下一个同级标题之间的原段落内容；`new_string` = `final.md` 对应段落。与 `/narrative` 和 `/technical` 的写入策略保持一致，避免多次写入后行号漂移导致的错位。
-- 💡 写入后执行 git checkpoint：`git add manuscript.tex && git commit -m "polish: {SECTION_NAME}"`
-- 💡 所有章节 polish 完成后，运行 `/finalize` 完成 Conclusion → Abstract → Cover Letter
+`EMBEDDED-PASS`：所给候选满足相同的语言、术语与 fidelity 条件；编译与写回为 `N/A`，由调用方负责。未通过空洞表述预检的 Results / Discussion 源文本不得获得 `EMBEDDED-PASS`，即使语法正确且零修改候选能通过 fidelity 校验。

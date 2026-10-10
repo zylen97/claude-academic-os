@@ -1,316 +1,186 @@
 #!/usr/bin/env python3
+"""Validate filled tag batches and write tagged copies of the review reports.
+
+Input : _tag_runs/dispatch_plan.json (dispatch_plan.py --mode report) and its
+        filled d{N}_b{M}_tags.md files; review reports direction{N}_report.md.
+Output: tagged_reports/direction{N}_report.md for every direction in the plan
+        (review reports are never modified; an older tagged copy is archived).
+
+Blocking: plan missing; a batch missing/unfilled/invalid (every row needs >=1
+valid label joined with '+'); review report rows changed since dispatch.
+Transactional: nothing is written unless every batch of the plan is OK.
+--check validates only and prints per-batch status (JSON with --json).
 """
-insert_tags.py — 将 Agent 输出的标签列表插入 direction reports（lit-tag §2.1）
-
-读取 _tags/d*_tags.md（编号→标签 列表），
-读取对应的 direction report（6列表格），
-在"入选理由"列前插入"功能标签"列，生成7列表格，覆写回 report。
-
-设计原理：表格插列是纯机械操作，不应由 LLM 执行。
-Agent 只负责判断标签，本脚本负责格式操作。
-
-用法:
-    python3 insert_tags.py \
-        --tags-dir structure/2_literature/_tags/ \
-        --report-dir structure/2_literature/
-"""
+from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
-VALID_TAGS = {
-    "BG", "LR", "COMP",
-    "METHOD-基础", "METHOD-先例",
-    "GAP-RQ1", "GAP-RQ2", "GAP-RQ3", "GAP-RQ4", "GAP-RQ5",
-    "DISC-RQ1", "DISC-RQ2", "DISC-RQ3", "DISC-RQ4", "DISC-RQ5",
-}
+def _shared() -> None:
+    for base in Path(__file__).resolve().parents:
+        for cand in (base / "shared", base / "_academic-shared" / "scripts"):
+            if (cand / "lit_common.py").is_file():
+                sys.path.insert(0, str(cand))
+                return
+    raise SystemExit("ERROR: lit_common.py not found (shared scripts directory)")
 
 
-# ---------------------------------------------------------------------------
-# parse tag files
-# ---------------------------------------------------------------------------
+_shared()
+import lit_common as lc  # noqa: E402
+import dispatch_plan as dp  # noqa: E402
 
-def parse_tag_file(filepath: Path) -> dict:
-    """Parse a tag file into {tier: {row_num: tags_string}}."""
-    text = filepath.read_text(encoding="utf-8")
+def allowed_tags(rq_count: int) -> set[str]:
+    return lc.allowed_labels(rq_count)
 
-    # Extract direction number
-    d_match = re.search(r"direction:\s*(\d+)", text)
-    direction = int(d_match.group(1)) if d_match else 0
 
-    if direction == 0:
-        fname_m = re.match(r"d(\d+)_tags", filepath.stem)
-        if fname_m:
-            direction = int(fname_m.group(1))
+split_tags = lc.split_labels
 
-    result = {"direction": direction, "tiers": {}}
-    current_tier = None
 
-    for line in text.split("\n"):
-        stripped = line.strip()
+def load_tag_plan(lit_dir: Path) -> dict:
+    path = lit_dir / dp.TAG_DIR / "dispatch_plan.json"
+    if not path.exists():
+        raise ValueError(f"DISPATCH_PLAN_MISSING: {path} (run dispatch_plan.py --mode report first)")
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    if plan.get("mode") != "report":
+        raise ValueError(f"DISPATCH_PLAN_WRONG_MODE: {path} is {plan.get('mode')!r}, expected 'report'")
+    skipped = lc.skipped_directions(lit_dir, ("review", "tag"))
+    plan["reports"] = [r for r in plan["reports"] if r["direction"] not in skipped]
+    plan["batches"] = [b for b in plan["batches"] if b["direction"] not in skipped]
+    return plan
 
-        # Detect tier (match section headers starting with ##)
-        if re.match(r"^##\s.*(核心文献|Core)", stripped, re.IGNORECASE):
-            current_tier = "core"
-            result["tiers"][current_tier] = {}
+
+def validate_batch(lit_dir: Path, b: dict, allowed: set[str]) -> dict:
+    res = {"batch_id": b["batch_id"], "status": "OK", "errors": [], "tags": {}}
+    path = lit_dir / dp.TAG_DIR / b["batch_file"]
+    if not path.exists():
+        res.update(status="MISSING", errors=[f"batch file missing: {path.name}"])
+        return res
+    text = path.read_text(encoding="utf-8")
+    meta = {"batch_id": b["batch_id"], "direction": b["direction"], "report_file": b["report_file"], "refs": b["refs"]}
+    if dp.read_meta(text, dp.TAGS_PREFIX) != meta:
+        res.update(status="INVALID", errors=["first-line lit-tags metadata missing or edited"])
+        return res
+    report = lit_dir / b["report_file"]
+    current = {(r["tier"], r["row"]): lc.norm_text(r["title"]) for r in lc.parse_report_rows(lc.read_text(report))} if report.exists() else {}
+    stale = [f"{x['tier']}:{x['row']}" for x in b["refs"] if current.get((x["tier"], x["row"])) != lc.norm_text(x["title"])]
+    if stale:
+        res.update(status="INVALID", errors=[f"REVIEW_REPORT_CHANGED: {b['report_file']} rows {stale[:5]} differ (rerun dispatch --mode report)"])
+        return res
+    tags, dup = dp.parse_tag_batch(text)
+    expected = {(x["tier"], x["row"]) for x in b["refs"]}
+    errors = [f"{e} appears twice" for e in dup]
+    if set(tags) != expected:
+        errors.append(f"rows differ from plan: missing={sorted(expected - set(tags))[:5]} extra={sorted(set(tags) - expected)[:5]}")
+    if not errors and all(not v for v in tags.values()):
+        res.update(status="EMPTY", errors=["not filled yet"])
+        return res
+    for key in sorted(expected & set(tags)):
+        labels = split_tags(tags[key])
+        if not labels:
+            errors.append(f"{key[0]}:{key[1]} has no label")
             continue
-        elif re.match(r"^##\s.*(重要文献|Important)", stripped, re.IGNORECASE):
-            current_tier = "important"
-            result["tiers"][current_tier] = {}
+        bad = [t for t in labels if t not in allowed]
+        if bad:
+            errors.append(f"{key[0]}:{key[1]} invalid label(s) {bad} (use + between labels)")
             continue
-        elif re.match(r"^##\s.*(备选文献|Backup)", stripped, re.IGNORECASE):
-            current_tier = "backup"
-            result["tiers"][current_tier] = {}
-            continue
-
-        if current_tier is None:
-            continue
-
-        # Parse tag lines — support both formats:
-        #   New: "N → TAG1+TAG2+..."  (template fill-in mode)
-        #   Old: "N: TAG1+TAG2+..."   (backward compat)
-        m = re.match(r"(\d+)\s*(?:→|[:：])\s*(.+)$", stripped)
-        if m:
-            row_num = int(m.group(1))
-            raw_tags = m.group(2).strip()
-
-            # Clean: strip annotation text after — or --(em dash or double hyphen)
-            raw_tags = re.split(r"\s*[—–]\s", raw_tags)[0].strip()
-
-            # Normalize separators: accept +, comma, 、 as tag delimiters
-            tag_parts = re.split(r"[+,、]\s*", raw_tags)
-
-            # Only keep valid tag names, discard annotation fragments
-            valid_tags = []
-            for t in tag_parts:
-                t = t.strip()
-                # Normalize BG variants: BG(2024-2026), BG(2025-2027) etc. → BG
-                if re.match(r"^BG\s*\(", t):
-                    t = "BG"
-                if t in VALID_TAGS:
-                    valid_tags.append(t)
-
-            tags = "+".join(valid_tags) if valid_tags else "LR"
-            result["tiers"][current_tier][row_num] = tags
-
-    return result
+        res["tags"][key] = "+".join(dict.fromkeys(labels))
+    if errors:
+        res.update(status="INVALID", errors=errors, tags={})
+    return res
 
 
-# ---------------------------------------------------------------------------
-# modify direction report
-# ---------------------------------------------------------------------------
-
-
-def validate_tags(tags_str: str) -> list[str]:
-    """Validate and clean a tag string."""
-    tags = [t.strip() for t in re.split(r"[+,、/]", tags_str) if t.strip()]
-    warnings = []
-    for t in tags:
-        if t not in VALID_TAGS:
-            warnings.append(f"unknown tag '{t}'")
-    return warnings
-
-
-def insert_tags_into_report(report_path: Path, tag_data: dict) -> tuple[str, list[str]]:
-    """Insert tag column into a direction report. Returns (new_content, errors)."""
-    text = report_path.read_text(encoding="utf-8")
-    lines = text.split("\n")
-    new_lines = []
-    errors = []
-
-    current_tier = None
-    row_counter = 0
-    tiers = tag_data.get("tiers", {})
-
-    for line in lines:
-        # Detect tier (only match section headers starting with ##, not paper titles)
-        tier_detected = None
-        if re.match(r"^##\s.*(核心文献|Core)", line, re.IGNORECASE):
-            tier_detected = "core"
-        elif re.match(r"^##\s.*(重要文献|Important)", line, re.IGNORECASE):
-            tier_detected = "important"
-        elif re.match(r"^##\s.*(备选文献|Backup)", line, re.IGNORECASE):
-            tier_detected = "backup"
-        elif re.match(r"^##\s.*(淘汰文献|淘汰摘要)", line, re.IGNORECASE):
-            current_tier = None
-            row_counter = 0
-
-        if tier_detected:
-            current_tier = tier_detected
-            row_counter = 0
-            new_lines.append(line)
-            continue
-
-        # Check if this is a table header row (contains 作者, but first cell is NOT a number)
-        # Must exclude data rows like "| 1 | Huisman | ... | Snijders共同作者... |"
-        if current_tier and not re.match(r"\|\s*\d+\s*\|", line) and re.search(r"(?:第一作者|作者)", line):
-            # Check if tag column already exists
-            if "功能标签" in line:
-                new_lines.append(line)
-                continue
-            # Insert "功能标签" column before last column (入选理由)
-            cells = line.split("|")
-            # cells: ['', ' # ', ' 作者 ', ' 标题 ', ' 年份 ', ' 期刊 ', ' 入选理由 ', '']
-            if len(cells) >= 8:  # 6 data columns + 2 empty
-                cells.insert(-2, " 功能标签 ")
-                new_lines.append("|".join(cells))
-            else:
-                new_lines.append(line)
-            continue
-
-        # Check if this is a separator row (|:--|...)
-        if current_tier and re.match(r"\|[\s:|-]+\|$", line.strip()):
-            # Check column count
-            sep_cells = line.split("|")
-            # If 7 columns already (has tag column), skip
-            if len(sep_cells) >= 9:
-                new_lines.append(line)
-                continue
-            if len(sep_cells) >= 8:
-                sep_cells.insert(-2, ":------")
-                new_lines.append("|".join(sep_cells))
-            else:
-                new_lines.append(line)
-            continue
-
-        # Check if this is a data row
-        if current_tier and line.strip().startswith("|"):
-            # Match data row: | N | ... |
-            m = re.match(r"\|\s*(\d+)\s*\|", line)
-            if m:
-                row_counter += 1
-                row_num = int(m.group(1))
-
-                # Get tags for this row
-                tier_tags = tiers.get(current_tier, {})
-                # Try matching by row_num first, then by counter
-                tags = tier_tags.get(row_num, tier_tags.get(row_counter, ""))
-
-                if not tags:
-                    # Fail-fast: do NOT write the data row at all.
-                    # Previously a silent "LR" fallback would pollute the direction
-                    # report even though exit code was 1 — re-running tag_aggregate
-                    # could then falsely PASS on the polluted file.
-                    # Prefix "NO_TAG:" is machine-readable; main() greps it to
-                    # identify files that must not be overwritten.
-                    errors.append(
-                        f"NO_TAG: D{tag_data['direction']} {current_tier}[{row_num}]: "
-                        f"no tag found — row skipped (Fail-Fast)"
-                    )
-                    # skip this data row entirely (don't append to new_lines)
-                    continue
-
-                # Validate tags
-                tag_warnings = validate_tags(tags)
-                for w in tag_warnings:
-                    errors.append(f"D{tag_data['direction']} {current_tier}[{row_num}]: {w}")
-
-                # Handle escaped pipes (\|) in existing tag column
-                safe_line = line.replace("\\|", "\x00")
-                cells = safe_line.split("|")
-
-                if len(cells) >= 9:  # already has tag column — overwrite it
-                    cells[-3] = f" {tags} "
-                    new_lines.append("|".join(cells).replace("\x00", "\\|"))
-                    continue
-
-                # Insert tag before last data column (入选理由)
-                if len(cells) >= 8:
-                    cells.insert(-2, f" {tags} ")
-                    new_lines.append("|".join(cells).replace("\x00", "\\|"))
+def render_tagged(review_text: str, tags: dict[tuple[str, int], str]) -> str:
+    out, tier = [], None
+    for line in review_text.splitlines():
+        if line.startswith("##"):
+            tier = next((t for t, h in lc.TIER_HEADINGS.items() if h[:4] in line), None)
+        elif tier and line.startswith("|"):
+            cells = lc.split_row(line)
+            if len(cells) == 6:
+                if re.fullmatch(r"\d+", cells[0]):
+                    cells.insert(5, tags[(tier, int(cells[0]))])
+                elif set(cells[0]) <= set(":-") and cells[0]:
+                    cells.insert(5, ":------")
                 else:
-                    new_lines.append(line)
-                continue
-
-        new_lines.append(line)
-
-    return "\n".join(new_lines), errors
+                    cells.insert(5, "功能标签")
+                line = "| " + " | ".join(cells) + " |"
+        out.append(line)
+    return "\n".join(out) + "\n"
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--lit-dir", required=True, help="structure/2_literature")
+    ap.add_argument("--rq-count", type=int, required=True, help="number of RQs in idea.md")
+    ap.add_argument("--check", action="store_true", help="validate only, write nothing")
+    ap.add_argument("--json", action="store_true", help="with --check: print JSON status map")
+    args = ap.parse_args()
+    lit_dir = Path(args.lit_dir)
+    try:
+        allowed = allowed_tags(args.rq_count)
+        plan = load_tag_plan(lit_dir)
+        results = [validate_batch(lit_dir, b, allowed) for b in plan["batches"]]
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        print("=== VERIFY: FAIL ===")
+        raise SystemExit(1)
+    bad = [r for r in results if r["status"] != "OK"]
+    if args.check and args.json:
+        print(json.dumps({r["batch_id"]: {"status": r["status"], "errors": r["errors"][:10]} for r in results},
+                         ensure_ascii=False, indent=2))
+        raise SystemExit(1 if bad else 0)
+    print("=== TAG BATCH CHECK ===")
+    for r in results:
+        print(f"{r['batch_id']}: {r['status']}")
+        for e in r["errors"][:10]:
+            print(f"  ❌ {e}")
+    if bad:
+        print("Redo batches: " + ", ".join(r["batch_id"] for r in bad))
+        print("No tagged report was written.")
+        print("=== VERIFY: FAIL ===")
+        raise SystemExit(1)
+    if args.check:
+        print("=== VERIFY: PASS ===")
+        return
 
-def main():
-    parser = argparse.ArgumentParser(description="Insert tags into direction reports")
-    parser.add_argument("--tags-dir", required=True, help="Directory containing d*_tags.md files")
-    parser.add_argument("--report-dir", required=True, help="Directory containing direction reports")
-    args = parser.parse_args()
-
-    tags_dir = Path(args.tags_dir)
-    report_dir = Path(args.report_dir)
-
-    tag_files = sorted(tags_dir.glob("d*_tags.md"))
-    if not tag_files:
-        print("ERROR: No tag files found", file=sys.stderr)
-        sys.exit(1)
-
-    all_errors = []
-    processed = 0
-    skipped_dirs = []  # directions whose file was NOT written due to missing tags
-
-    for tag_file in tag_files:
-        tag_data = parse_tag_file(tag_file)
-        d = tag_data["direction"]
-
-        # Find corresponding report
-        report_files = list(report_dir.glob(f"direction{d}_*_report.md"))
-        if not report_files:
-            print(f"  ✗ D{d}: no direction report found", file=sys.stderr)
-            all_errors.append(f"D{d}: no direction report found")
-            continue
-
-        report_path = report_files[0]
-
-        # Count tags
-        total_tags = sum(len(v) for v in tag_data["tiers"].values())
-
-        # Insert tags
-        new_content, errors = insert_tags_into_report(report_path, tag_data)
-        all_errors.extend(errors)
-
-        # Atomicity guard: if this file has critical errors (missing tags),
-        # do NOT overwrite the source — preserve original intact so the user
-        # can re-run after fixing the tag file. Without this guard, the report
-        # would be written with data rows silently deleted, violating atomicity.
-        # Use the "NO_TAG:" prefix (not arbitrary substring) to stay decoupled
-        # from error-message wording changes.
-        file_critical = [e for e in errors if e.startswith("NO_TAG:")]
-        if file_critical:
-            skipped_dirs.append(d)
-            print(f"  ✗ D{d}: {len(file_critical)} missing tags — file NOT written (preserved original)")
-            for e in file_critical[:3]:
-                print(f"    → {e}")
-            continue
-
-        # Write back
-        report_path.write_text(new_content, encoding="utf-8")
-        processed += 1
-
-        status = "⚠" if errors else "✓"
-        print(f"  {status} D{d}: {total_tags} tags inserted into {report_path.name}")
-        for e in errors[:3]:
-            print(f"    → {e}")
-
-    print(f"\nProcessed: {processed}/{len(tag_files)} directions")
-
-    if all_errors:
-        # Only FAIL for critical errors (no tags at all)
-        critical = [e for e in all_errors if e.startswith("NO_TAG:") or "no direction report" in e]
-        if critical:
-            print(f"\n=== VERIFY: FAIL ===")
-            print(f"Critical errors: {len(critical)}")
-            if skipped_dirs:
-                print(f"Skipped (file preserved, re-run after fixing tag files): "
-                      f"D{','.join(map(str, sorted(skipped_dirs)))}")
-            sys.exit(1)
-        else:
-            print(f"\n=== VERIFY: PASS (with {len(all_errors)} warnings) ===")
-    else:
-        print(f"\n=== VERIFY: PASS ===")
+    by_dir: dict[int, dict] = {}
+    for b, r in zip(plan["batches"], results):
+        by_dir.setdefault(b["direction"], {}).update(r["tags"])
+    out_dir = lit_dir / "tagged_reports"
+    rendered: dict[Path, str] = {}
+    try:
+        for item in plan["reports"]:
+            report = lit_dir / item["report_file"]
+            rows = lc.parse_report_rows(lc.read_text(report))
+            keys = {(x["tier"], x["row"]) for x in rows}
+            tags = by_dir.get(item["direction"], {})
+            if len(rows) != item["row_count"] or keys != set(tags):
+                raise ValueError(f"REVIEW_REPORT_CHANGED: {report.name} rows no longer match the tag plan (rerun dispatch --mode report)")
+            rendered[out_dir / report.name] = render_tagged(lc.read_text(report), tags)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".tag-stage-", dir=out_dir) as tmp:
+            for target, text in rendered.items():
+                (Path(tmp) / target.name).write_text(text, encoding="utf-8")
+            for target, text in rendered.items():
+                if target.exists():
+                    if target.read_text(encoding="utf-8") == text:
+                        print(f"  = {target.name}: unchanged")
+                        continue
+                    print(f"NOTICE: archived old tagged copy -> {lc.archive(target, lit_dir)}")
+                os.replace(Path(tmp) / target.name, target)
+                print(f"  ✓ tagged_reports/{target.name}")
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        print("=== VERIFY: FAIL ===")
+        raise SystemExit(1)
+    print(f"Directions written: {', '.join('D%d' % i['direction'] for i in plan['reports'])}")
+    print("=== VERIFY: PASS ===")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,13 @@ quota_calc.py — 文献检索配额计算（lit-plan §2）
           "id": 1,
           "name": "装配式建筑供应链管理",
           "tags": ["BG", "LR", "GAP-RQ1", "DISC-RQ1"],
-          "priority": "P1"
+          "priority": "P1",
+          "direction_type": "corpus",
+          "actual_hits": 240,
+          "query_status": "PASS",
+          "sample_size": 20,
+          "sample_relevant": 13,
+          "sample_precision": 0.65
         },
         ...
       ]
@@ -87,14 +93,15 @@ def get_pool_targets(all_tags: set[str]) -> dict[str, int]:
     return targets
 
 
-def calculate_quotas(directions: list[dict], total_budget: int) -> dict:
+def calculate_quotas(directions: list[dict], total_budget: int, min_quota: int | None = None) -> dict:
     """
     核心计算逻辑：
     1. tag_share[标签, 方向] = 标签Pool目标 / 服务该标签的方向数
     2. raw_demand[方向] = Σ tag_share（对该方向服务的所有标签求和）
     3. quota[方向] = round(TOTAL_BUDGET × raw_demand / Σ raw_demand)
-    4. 保底：每个方向至少 MIN_QUOTA 篇
+    4. 保底：每个方向至少 min_quota 篇（默认 20）
     """
+    min_quota = MIN_QUOTA if min_quota is None else min_quota
     # 收集所有标签
     all_tags = set()
     for d in directions:
@@ -140,42 +147,55 @@ def calculate_quotas(directions: list[dict], total_budget: int) -> dict:
         print("ERROR: Total raw demand is 0, cannot calculate quotas", file=sys.stderr)
         sys.exit(1)
 
+    # 第4步：保底 min_quota。需要迭代固定低配额方向；一次性重缩放会把
+    # 原本未触底的方向重新压到 min_quota 以下，导致 VERIFY 失败。
     quotas = {}
-    for d in directions:
-        did = d["id"]
-        quota = round(total_budget * raw_demands[did] / total_demand)
-        quotas[did] = quota
+    remaining = set(raw_demands)
+    remaining_budget = total_budget
 
-    # 第4步：保底 MIN_QUOTA
-    needs_rescale = False
-    for did in quotas:
-        if quotas[did] < MIN_QUOTA:
-            quotas[did] = MIN_QUOTA
-            needs_rescale = True
+    if total_budget < min_quota * len(raw_demands):
+        # 极端情况：预算不足以满足全方向保底。调用方应传 --min-quota
+        # 降低保底；这里仍给出确定性均分并让 verify 暴露该问题。
+        per_dir = max(1, total_budget // len(raw_demands))
+        remainder = total_budget - per_dir * len(raw_demands)
+        order = sorted(raw_demands, key=lambda did: raw_demands[did], reverse=True)
+        quotas = {did: per_dir for did in raw_demands}
+        for did in order[:remainder]:
+            quotas[did] += 1
+        print(
+            f"WARNING: min quota sum ({min_quota * len(raw_demands)}) exceeds "
+            f"budget ({total_budget}); pass --min-quota or per-track min quota to lower the floor.",
+            file=sys.stderr,
+        )
+    else:
+        while remaining:
+            rem_demand = sum(raw_demands[did] for did in remaining)
+            tentative = {
+                did: round(remaining_budget * raw_demands[did] / rem_demand)
+                for did in remaining
+            }
+            below_min = [did for did, q in tentative.items() if q < min_quota]
+            if not below_min:
+                quotas.update(tentative)
+                break
+            for did in below_min:
+                quotas[did] = min_quota
+                remaining.remove(did)
+                remaining_budget -= min_quota
 
-    if needs_rescale:
-        # 重新缩放非保底方向
-        fixed_sum = sum(q for q in quotas.values() if q == MIN_QUOTA)
-        remaining_budget = total_budget - fixed_sum
-        non_fixed = {did: raw_demands[did] for did in quotas if quotas[did] != MIN_QUOTA}
-        non_fixed_total = sum(non_fixed.values())
-        if remaining_budget <= 0:
-            # 极端情况：保底方向总和已超预算，均分预算给所有方向
-            per_dir = max(1, total_budget // len(quotas))
-            for did in quotas:
-                quotas[did] = per_dir
-            print(f"WARNING: MIN_QUOTA sum ({fixed_sum}) exceeds budget ({total_budget}), "
-                  f"falling back to equal split ({per_dir}/direction)", file=sys.stderr)
-        elif non_fixed_total > 0:
-            for did in non_fixed:
-                quotas[did] = round(remaining_budget * raw_demands[did] / non_fixed_total)
-
-    # 最终调整：确保总和精确等于预算（处理四舍五入误差）
-    diff = total_budget - sum(quotas.values())
-    if diff != 0:
-        # 加减到最大配额的方向
-        max_did = max(quotas, key=quotas.get)
-        quotas[max_did] += diff
+        # 最终调整：确保总和精确等于预算（处理四舍五入误差），且不破坏保底。
+        diff = total_budget - sum(quotas.values())
+        while diff > 0:
+            max_did = max(quotas, key=lambda did: (raw_demands[did], quotas[did]))
+            quotas[max_did] += 1
+            diff -= 1
+        while diff < 0:
+            candidates = [did for did, q in quotas.items() if q > min_quota]
+            if not candidates:
+                break
+            max_did = max(candidates, key=lambda did: (quotas[did], raw_demands[did]))
+            quotas[max_did] -= 1
+            diff += 1
 
     # 内部分层
     tiers = {}
@@ -209,9 +229,15 @@ def calculate_quotas(directions: list[dict], total_budget: int) -> dict:
     }
 
 
-def verify(result: dict, directions: list[dict]) -> list[str]:
+def verify(
+    result: dict,
+    directions: list[dict],
+    min_quota: int | None = None,
+    track: str = "wos",
+) -> list[str]:
     """内建校验，返回错误列表（空 = PASS）。"""
     errors = []
+    min_quota = MIN_QUOTA if min_quota is None else min_quota
     quotas = result["quotas"]
     total_budget = result["total_budget"]
     coverage = result["coverage"]
@@ -224,8 +250,8 @@ def verify(result: dict, directions: list[dict]) -> list[str]:
 
     # 2. 最低配额校验
     for did, q in quotas.items():
-        if q < MIN_QUOTA:
-            errors.append(f"MIN_VIOLATION: 方向{did} 配额={q} < {MIN_QUOTA}")
+        if q < min_quota:
+            errors.append(f"MIN_VIOLATION: 方向{did} 配额={q} < {min_quota}")
 
     # 3. 标签覆盖校验
     for tag, dirs in coverage.items():
@@ -244,11 +270,84 @@ def verify(result: dict, directions: list[dict]) -> list[str]:
         if not d.get("tags"):
             errors.append(f"NO_TAGS: 方向{d['id']} 没有功能标签")
 
+    # 6. WoS 自动校准后的容量与质量门。未提供 actual_hits 时视为
+    # provisional plan，不在本脚本里伪造命中量；提供后必须通过。
+    if track == "wos":
+        passing_statuses = {"PASS", "PASS_TRUNCATE_1000"}
+        for d in directions:
+            did = d["id"]
+            if d.get("direction_type", "corpus") == "targeted_probe":
+                errors.append(
+                    f"PROBE_HAS_QUOTA: 方向{did} 是 targeted_probe，不应进入正式配额计算"
+                )
+                continue
+            actual_hits = d.get("actual_hits", d.get("wos_actual_hits"))
+            if actual_hits is None:
+                continue
+            try:
+                actual_hits = int(actual_hits)
+            except (TypeError, ValueError):
+                errors.append(f"INVALID_HITS: 方向{did} actual_hits={actual_hits!r}")
+                continue
+            quota = quotas[did]
+            if actual_hits < quota:
+                errors.append(
+                    f"CAPACITY_VIOLATION: 方向{did} 实际命中={actual_hits} < 配额={quota}"
+                )
+            if actual_hits < 50:
+                errors.append(
+                    f"CORPUS_TOO_THIN: 方向{did} 实际命中={actual_hits} < 50；"
+                    "应放宽、合并或降为 targeted_probe"
+                )
+            query_status = d.get("query_status")
+            if query_status is None:
+                errors.append(f"QUERY_STATUS_MISSING: 方向{did} 缺少 query_status")
+            elif query_status not in passing_statuses:
+                errors.append(
+                    f"QUERY_NOT_FROZEN: 方向{did} query_status={query_status!r}"
+                )
+            sample_size = d.get("sample_size")
+            if sample_size is None:
+                errors.append(f"SAMPLE_SIZE_MISSING: 方向{did} 缺少 sample_size")
+            else:
+                try:
+                    sample_size = int(sample_size)
+                except (TypeError, ValueError):
+                    errors.append(
+                        f"INVALID_SAMPLE_SIZE: 方向{did} sample_size={sample_size!r}"
+                    )
+                else:
+                    required_sample = min(20, actual_hits)
+                    if sample_size < required_sample:
+                        errors.append(
+                            f"SAMPLE_TOO_SMALL: 方向{did} 抽样量={sample_size} "
+                            f"< 冻结所需={required_sample}"
+                        )
+            precision = d.get("sample_precision")
+            if precision is None:
+                errors.append(f"PRECISION_MISSING: 方向{did} 缺少 sample_precision")
+            else:
+                try:
+                    precision = float(precision)
+                except (TypeError, ValueError):
+                    errors.append(
+                        f"INVALID_PRECISION: 方向{did} sample_precision={precision!r}"
+                    )
+                else:
+                    if not 0 <= precision <= 1:
+                        errors.append(
+                            f"INVALID_PRECISION: 方向{did} sample_precision={precision}"
+                        )
+                    elif precision < 0.40:
+                        errors.append(
+                            f"LOW_PRECISION: 方向{did} 抽样相关率={precision:.0%} < 40%"
+                        )
+
     return errors
 
 
 def main():
-    global MIN_QUOTA  # Bug 2 fix: allow overriding for small-budget projects
+    global MIN_QUOTA  # 允许小预算项目降低保底
 
     parser = argparse.ArgumentParser(description="Calculate literature search quotas")
     parser.add_argument("--directions", required=True,
@@ -262,7 +361,11 @@ def main():
     parser.add_argument("--output", default=None,
                         help="Output JSON path (default: same dir as input / _quota_result.json)")
     parser.add_argument("--min-quota", type=int, default=None,
-                        help="Override MIN_QUOTA constant (default: 20)")
+                        help="Override MIN_QUOTA constant for all tracks (default: 20)")
+    parser.add_argument("--min-quota-wos", type=int, default=None,
+                        help="Override minimum per-direction quota for WoS track")
+    parser.add_argument("--min-quota-cnki", type=int, default=None,
+                        help="Override minimum per-direction quota for CNKI track")
     args = parser.parse_args()
 
     if args.min_quota is not None:
@@ -292,16 +395,23 @@ def main():
         print("ERROR: No directions found in input JSON", file=sys.stderr)
         sys.exit(1)
 
+    wos_min_quota = args.min_quota_wos if args.min_quota_wos is not None else MIN_QUOTA
+    cnki_min_quota = args.min_quota_cnki if args.min_quota_cnki is not None else MIN_QUOTA
+
     # 计算 WoS 配额
-    wos_result = calculate_quotas(directions, wos_budget)
-    wos_errors = verify(wos_result, directions)
+    wos_result = calculate_quotas(directions, wos_budget, min_quota=wos_min_quota)
+    wos_errors = verify(
+        wos_result, directions, min_quota=wos_min_quota, track="wos"
+    )
 
     # 计算 CNKI 配额（双轨模式）
     cnki_result = None
     cnki_errors = []
     if dual_mode:
-        cnki_result = calculate_quotas(directions, cnki_budget)
-        cnki_errors = verify(cnki_result, directions)
+        cnki_result = calculate_quotas(directions, cnki_budget, min_quota=cnki_min_quota)
+        cnki_errors = verify(
+            cnki_result, directions, min_quota=cnki_min_quota, track="cnki"
+        )
 
     # 输出 JSON
     output_path = args.output or str(Path(args.directions).parent / "_quota_result.json")
@@ -324,6 +434,18 @@ def main():
             "wos_quota": wos_q,
             "wos_tiers": wos_result["tiers"][did],
         }
+        for field in (
+            "direction_type",
+            "actual_hits",
+            "wos_actual_hits",
+            "query_status",
+            "sample_size",
+            "sample_relevant",
+            "sample_precision",
+            "final_ris",
+        ):
+            if field in d:
+                dir_entry[field] = d[field]
         if dual_mode:
             cnki_q = cnki_result["quotas"][did]
             dir_entry["cnki_quota"] = cnki_q
@@ -336,8 +458,6 @@ def main():
     output_data["pool_targets"] = wos_result["pool_targets"]
     output_data["coverage"] = {k: [f"D{x}" for x in v] for k, v in wos_result["coverage"].items()}
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
 
     # ===== stdout 结构化摘要 =====
     print("=== QUOTA CALCULATION ===")
@@ -391,13 +511,16 @@ def main():
     # 校验结果
     all_errors = wos_errors + [f"[CNKI] {e}" for e in cnki_errors]
     if all_errors:
+        # FAIL 时不写 _quota_result.json，避免覆盖上一次通过的配额
         print("=== VERIFY: FAIL ===")
         for e in all_errors:
             print(f"  ❌ {e}")
+        print(f"未写入 {output_path}")
         sys.exit(1)
-    else:
-        print("=== VERIFY: PASS ===")
-        print(f"Output written to: {output_path}")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, ensure_ascii=False, indent=2)
+    print("=== VERIFY: PASS ===")
+    print(f"Output written to: {output_path}")
 
 
 if __name__ == "__main__":

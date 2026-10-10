@@ -20,14 +20,14 @@
   \node[pipeline] (pool) at (13.3,-3.0) {\texttt{/lit-pool}\\master.bib};
 
   \node[layerlabel] at (-0.25,-4.55) {Technical \& Narrative Writing};
-  \node[qa] (audit) at (0.9,-5.1) {\texttt{/method-audit}\\benchmark};
-  \node[pipeline] (methodend) at (4.0,-5.1) {\texttt{/method-end}\\chapter md};
-  \node[qa] (assets) at (7.1,-5.1) {\texttt{/figure}\\\texttt{/latex-table}};
-  \node[pipeline] (outline) at (10.2,-5.1) {\texttt{/pen-outline}\\sentences};
-  \node[pipeline] (draft) at (13.3,-5.1) {\texttt{/pen-draft}\\writers};
+  \node[qa] (audit) at (0.9,-5.1) {\texttt{/technical-md}\\benchmark + md};
+  \node[qa] (assets) at (4.0,-5.1) {\texttt{/figure}\\\texttt{/latex-table}};
+  \node[pipeline] (technical) at (7.1,-5.1) {\texttt{/technical}\\tex + audit};
+  \node[pipeline] (outline) at (10.2,-5.1) {\texttt{/narrative}\\intro/LR};
+  \node[pipeline] (draft) at (13.3,-5.1) {\texttt{/narrative}\\discussion};
 
   \node[layerlabel] at (-0.25,-6.65) {Polish, Submit, Revise};
-  \node[qa] (polish) at (0.9,-7.2) {\texttt{/pen-polish}\\review/polish};
+  \node[qa] (polish) at (0.9,-7.2) {\texttt{/polish}\\auto language};
   \node[pipeline] (finalize) at (4.0,-7.2) {\texttt{/finalize}\\abstract/cover};
   \node[qa] (presubmit) at (7.1,-7.2) {\texttt{/pre-submit}\\checks};
   \node[radar] (revinit) at (10.2,-7.2) {\texttt{/rev-init}\\baseline};
@@ -37,7 +37,7 @@
   \node[infra] (resume) at (1.35,-9.3) {\texttt{/resume}\\context};
   \node[infra] (web) at (4.45,-9.3) {\texttt{/web-access}\\CDP};
   \node[infra] (peer) at (7.55,-9.3) {\texttt{/peer-review}\\reviewer};
-  \node[infra] (agents) at (10.65,-9.3) {Agents\\writer/reviewer};
+  \node[infra] (agents) at (10.65,-9.3) {Agents\\writer/language};
   \node[infra] (journal) at (13.75,-9.3) {journal-scout\\guidelines};
 
   \draw[arrow] (scout) -- (mine);
@@ -49,9 +49,9 @@
   \draw[arrow] (review) -- (tag);
   \draw[arrow] (tag) -- (pool);
   \draw[arrow] (pool.south) -- ++(0,-0.55) -| (audit.north);
-  \draw[arrow] (audit) -- (methodend);
-  \draw[arrow] (methodend) -- (assets);
-  \draw[arrow] (assets) -- (outline);
+  \draw[arrow] (audit) -- (assets);
+  \draw[arrow] (assets) -- (technical);
+  \draw[arrow] (technical) -- (outline);
   \draw[arrow] (outline) -- (draft);
   \draw[arrow] (draft.south) -- ++(0,-0.55) -| (polish.north);
   \draw[arrow] (polish) -- (finalize);
@@ -59,7 +59,6 @@
   \draw[arrow] (presubmit) -- (revinit);
   \draw[arrow] (revinit) -- (revrespond);
   \draw[branch] (revrespond.north) .. controls (13.6,-6.2) and (2.0,-6.2) .. (polish.north);
-  \draw[branch] (agents.north) -- ++(0,0.55) -| (draft.south);
   \draw[branch] (journal.north) -- ++(0,0.55) -| (draft.south);
 \end{tikzpicture}
 \end{document}

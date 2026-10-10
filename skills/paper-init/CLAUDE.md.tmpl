@@ -4,130 +4,101 @@
 - **项目编号**: {ID}
 - **英文标题**: TODO: Fill in English title
 - **一句话概括**: TODO: 一句话概括研究内容
-- **方法**: TODO: 填写研究方法
+- **方法**: {METHOD_LABEL}（TODO: 补充具体方法，如"两阶段 Stackelberg 博弈 + 数值研究"）
 - **目标期刊**: TODO: 填写目标期刊 [首选] / 备选期刊 [备选]
 
 ## 项目阶段
 - 状态: foundation
 - 更新时间: {TODAY}
 
-> **阶段枚举**（由 skills 自动维护，勿手动跳级）：
-> - `foundation`：idea 确定 + 文献 + idea-refine + 技术型章节撰写/审计（步骤①-⑤）
-> - `drafting`：叙述型章节撰写 + 全文定稿（步骤⑥-⑨）
-> - `submitted`：已投稿，等待审稿
-> - `revision-R{N}`：第 N 轮审稿修改
+> 阶段枚举与写入负责人以 `~/.claude/skills/shared/ACADEMIC-OS-LITE.md` §1 为准；只有负责技能写入本节，其他技能只读。
+> - `foundation`：idea、文献、研究设计（`/paper-init` 初始化；`/idea-refine` 在设计被改动时回退到此）
+> - `analysis`：执行已批准的分析计划（`/analysis` Plan：用户批准 `analysis_plan.md` 后写入）
+> - `drafting`：技术章节与叙述章节写作、定稿（`/analysis` Release：用户确认 `results_register.md` 完整后写入）
+> - `submitted`：已投稿（`/pre-submit` 写入）
+> - `revision-R{N}`：第 N 轮修改（`/rev-init` 写入）
+
+## 技术章节
+
+> 由 `/technical` Map 在 `technical_map.md` 结构确认后写入；`/narrative` 据此定位技术章节，**不按字面标题匹配**。
+> 每行一个 manuscript 中的 `\section` 标题（与正文逐字一致），角色只能是 `method` / `results` / `simulation`，按正文顺序排列。
+
+| \section 标题 | 角色 |
+|---|---|
+| （待 /technical Map 写入） | — |
 
 ## 核心配置
+- **方法 profile**: {PROFILE}
 - **模板**: {TEMPLATE_CLASS}
 - **主文件**: `manuscript.tex` · **文献**: `{ID}.bib`
 - **投稿附件**: `submission/`（{SUBMISSION_FILES}）
+
+## 主流程（规格 §4.1）
+
+`/lit-plan` → WoS → `/lit-workflow` → `/idea-refine`【确认】→ `/analysis` Plan【确认】→ Run → Release【确认】→ `/technical` Map【确认】→ Tex → `/narrative`（Intro/LR 可提前；Discussion 在 technical 之后）→ [`/polish`] → `/finalize` → `/pre-submit` → `/rev-init` → `/rev-respond`。
+回流：设计层改动 → `analysis_plan.md` 第 7 节变更记录 → `/idea-refine` / `/analysis` Plan。
+
+## 文件与权威
+
+| 文件 | 作用 | 谁写 |
+|---|---|---|
+| `manuscript.tex` | 唯一正文 | `/technical`、`/narrative`、`/polish`、`/finalize`、`/rev-respond` |
+| `structure/0_global/idea.md` | 为什么、方向（不含公式、推导、数值结果） | `/idea-refine`（用户确认后） |
+| `structure/0_global/analysis_plan.md` | 分析计划：RQ→结论目标、设计基准（第 2 节）、模型与输入、任务、检验、解读边界、变更记录（第 7 节，只追加） | `/analysis` Plan；`/idea-refine` 只写第 2 节与第 7 节 |
+| `structure/0_global/results_register.md` | 结果登记表：正文每个技术结论都指回其中一条 | `/analysis` Release |
+| `structure/0_global/technical_map.md` | 技术章节结构、段落任务、术语表（第 2 节）、报告基准 | `/technical` Map |
+| `structure/1_introduction/introduction.md`、`structure/2_literature/literature.md` | Intro / LR blueprint：先更新并经用户确认，再写 tex | `/narrative` |
+| `structure/3_analysis/` | 分析工作区（analytical-model 的 `derivation/` 为推导工作区，长期保留） | `/analysis` Run |
+
+- 不建 `methodology.md`、`results.md`、`simulation.md` 等技术章节 md；技术正文只在 `manuscript.tex`。
+- `idea.md` 修改须先征得用户同意；保持文档结构，覆盖式更新（历史由 git 追踪）。
+- `analysis_plan.md` 批准（状态 approved）后，第 1、3、4、5 节的任何改动必须先在第 7 节追加一行并经用户确认。
 
 ## data/ 数据管理规范
 
 ```
 data/
 ├── raw/          # 原始数据（只读，不可修改）
-├── processed/    # 数据管道产出（清洗后的中间文件）
-├── scripts/      # 所有 R/Python 分析脚本（数据管道 + 主模型）
-├── models/       # 模型估计对象（.rds/.RData，用于 warm start 和交叉引用）
-├── results/      # 模型输出日志（.txt，人类可读的估计结果）
-├── robustness/   # 稳健性检验（脚本 + 结果 + 日志）
-├── notes/        # 分析过程笔记（自由格式 markdown，不进正文）
+├── processed/    # 清洗后的中间文件
+├── scripts/      # 分析脚本
+├── models/       # 模型估计对象
+├── results/      # 正式结果输出（register 的来源）
+├── robustness/   # 稳健性 / 敏感性检验
+├── notes/        # 分析过程笔记（不进正文）
 └── _archive/     # 废弃的旧版本文件（不删，按原子目录归档）
 ```
 
-**`data/notes/` 用法**：
-- 命名：`{YYYY-MM-DD}_{topic}.md`，如 `2026-04-29_pretest_failed_specs.md`、`2026-05-03_anomaly_in_subsample_C.md`
-- 内容：分析过程中的"为什么用这个 spec / 试了什么没成 / 发现什么 anomaly / 留待后续探索的问题"——**不进正文，但是审稿弹药 + 自己未来回头的参考**
-- 边界：不写公式推导（那进 X.md）；不写最终数值结果（那进 `data/results/`）；只写**研究判断的过程性思考**
-- `/method-audit` 在维度 C/D（参数与数据、结果可靠性）审计时会主动读 `data/notes/` 作为上下文
+**命名规范**（方法 profile：{PROFILE}；所有文件以 `{ID}_` 为前缀）：
 
-**命名规范**：所有文件以项目编号为前缀（如 `{ID}_`）
-- 脚本：`{ID}_data_pipeline.R`、`{ID}_models.R`
-- 模型对象：`{ID}_m1.rds` ~ `{ID}_mN.rds`
-- 日志：与模型对象同名，`.txt` 后缀
-- 稳健性：`{ID}_rob_{检验名}.R`、`{ID}_rob_{检验名}.rds`
+{DATA_NAMING}
 
-**输出路径规则**：分析脚本的所有输出必须指向 `data/` 下的对应子目录，禁止输出到项目根目录。对于 RSiena 等通过 `projname` 参数控制输出路径的工具，`projname` 必须包含目标目录（如 `"data/results/{ID}_m3"`）。
+**输出路径规则**：正式输出只写入 `data/results/`、`data/robustness/`（analytical-model 的复核输出写入 `structure/3_analysis/derivation/checks/`），禁止输出到项目根目录。register 的"来源"列只能指向这些位置。
 
-**脚本执行顺序**：
-1. `{ID}_data_pipeline.R` → 产出 `processed/*.rds`
-2. `{ID}_models.R` → 产出 `models/*.rds` + `results/*.txt`（依赖步骤 1）
-3. `robustness/{ID}_rob_*.R` → 产出 `robustness/*.rds`（依赖步骤 1+2）
+**`data/notes/` 用法**：命名 `{YYYY-MM-DD}_{topic}.md`；记录"为什么用这个设定 / 试了什么没成 / 发现什么异常"等过程判断。不写公式推导（进 `derivation/` 或 `analysis_plan.md`），不写最终数值（进 `data/results/`）。
 
 ## structure/ 组织说明
-项目研究素材按 manuscript 章节组织在 `structure/` 下：
 
-{STRUCTURE_TABLE}
-
-- `pandoc_header.tex` 勿删改
+| 子目录 | 内容 |
+|:--|:--|
+| `0_global/` | `idea.md`、`analysis_plan.md`、`results_register.md`、`technical_map.md`、`idea-refine/`（审稿轮次）、`background/`（可选） |
+| `1_introduction/` | `introduction.md`（Intro blueprint） |
+| `2_literature/` | 文献流水线全部产物 + `literature.md`（LR blueprint） |
+| `3_analysis/` | 分析工作区；analytical-model 含 `derivation/`（推导 + `checks/` 复核脚本） |
+| `figures_tables/` | `index.md`（唯一注册表）、`tables.tex`（全部表格）、`figures/`（全部图片） |
 
 ### 图表管理规则
 
-- **所有图片**存放于 `structure/figures_tables/figures/`，仿真脚本输出路径指向此处
-- **所有表格**的 LaTeX 代码统一写在 `structure/figures_tables/tables.tex` 中，定稿时贴到 manuscript.tex 末尾
-- **`index.md`** 是唯一注册表，记录每个图表的编号、标题、所属章节、状态
-- 各章节 md 中**不放图表内容**，只标注"此处引用 Table X / Fig. X"
-- 新增/修改图表时，必须同步更新 `index.md`
-- **表格即时落地**：当章节 md 中的表格内容定稿后，应立即写入 `tables.tex`（使用 /latex-table 或直接编写），并更新 `index.md` 状态为 `drafted`。manuscript.tex 正文中仅用 `Table~\ref{tab:xxx}` 引用，不嵌入表格代码。不得将表格制作推迟到 /technical 或 /narrative 等写作 skill——这些 skill 只管正文文字。
+- 所有图片存放于 `structure/figures_tables/figures/`；所有表格 LaTeX 代码写在 `structure/figures_tables/tables.tex`，定稿时贴到 manuscript.tex 末尾。
+- `index.md` 是唯一注册表；新增 / 修改图表时同步更新。
+- 数据图与结果表的数据只能来自 `results_register.md` 中登记的来源，并在 `index.md` 的"来源"列写 register ID；概念图不需要。
+- manuscript.tex 正文只用 `Table~\ref{tab:xxx}` / `Fig.~\ref{fig:xxx}` 引用；表格制作用 `/latex-table`，图用 `/figure`。
 
-### 文件交互规则
+## 跨章节一致性
 
-**层级**: idea.md（纲领：为什么/方向）→ 各章节 X.md（唯一权威源：正文要点）→ manuscript.tex（产出）
+- RQ 编号与措辞：`idea.md` §2 → Introduction RQ 列表 → Discussion 逐 RQ 回应，三处一致。
+- 贡献声明：`idea.md` §4 意图 → Discussion 的理论 / 实践启示，逻辑对应。
+- 术语：以 `technical_map.md` 第 2 节术语表为准，`/narrative` 与 `/polish` 读取。
 
-**章节处理的两种路径**:
+## Git
 
-章节按性质分两类，处理方式不同：
-
-| 类型 | 章节 | 写作路径 | 中间产物 |
-|:-----|:-----|:---------|:---------|
-| 叙述型（blueprint-first） | Introduction, Literature Review | `/narrative` 先生成/更新 blueprint 并 checkpoint，再写 manuscript.tex | `introduction.md` / `literature.md`（逻辑合约，非最终正文） |
-| 叙述型（tex-in/out） | Discussion | `/narrative` 直接基于 Methodology/Results 写 tex | 不强制 Discussion 中间 md |
-| 技术型 | {TECHNICAL_SECTIONS} | 主 agent 在 `X.md` 填写素材 → `/method-audit` 审计 + 写作蓝图 → `/technical` 直接 tex 生成 | `X.md`（含 `## 正文要点` + `## 写作蓝图` + `## 必备元素`） |
-
-**技术型 X.md 单文件原则**：
-- **`X.md`** 是技术型章节的**唯一权威源**：研究推导、正文要点、引用、字数分配、写作蓝图全部落在这里。
-- `/technical` 只读 X.md。`###` 标题 = `\subsection`，`####` = `\subsubsection`。X.md 必须含 method-audit 输出的 `## 写作蓝图` 区块，含三层结构：
-  - **整体 Reader Journey**（1-2 句概述本章读者认知路径）
-  - **Subsection 级 5 字段**：Reader Entry Point / Content Journey / Exit Point / Why This Order / Visual Anchor
-  - **跨章节过渡**：本章与前后章节的衔接句指南
-- 完整证明用 `> **Proof (→ Supplementary):**` 标记外放至附录；中间推导步骤、失败尝试、版本对比等过程性内容留在 git 历史中，不进 X.md。
-
-**叙述型原则**：
-- `manuscript.tex` 是最终正文正本；`introduction.md` 与 `literature.md` 是 Introduction/Literature Review 的 blueprint 逻辑合约，不是最终正文
-- `/narrative section=introduction|literature` 必须先更新并 checkpoint 对应 blueprint，再生成和替换 tex 段落
-- `/narrative section=discussion` 直接基于实际 Methodology/Results 和 `manuscript.tex` 写入，不强制 Discussion 中间 md
-
-**权威源优先级**（冲突时遵循）：
-1. `manuscript.tex`（最终唯一正本）
-2. `X.md`（仅技术型；manuscript 插入前的素材源）
-3. `idea.md`、audit 报告、修改计划
-4. `data/` 输出、figure/table 注册表、可复现脚本
-
-**md 书写语言**（仅技术型 X.md）：中文表述，但以下内容用英文原文：citation key（`\citet{}`/`\citep{}`）、专用术语、公式符号、`###` 标题（与 manuscript 一致）
-
-**技术型颗粒度标准**（验证原则：/technical 翻译时不需要做任何技术判断）：
-每个 `###` subsection 下必须包含：
-- 每一个会出现在正文中的公式（编号公式和关键行内公式）
-- 每一个命题/引理的完整陈述
-- 每一个证明的思路骨架（完整证明用 `> **Proof (→ Supplementary):**` 标记，/technical 外放至附录）
-- 每一个假设的文字表述 + 合理性论证
-- 每一个经济直觉/含义解读
-- 每一个模型间的对比说明
-- 表格和图表仅标注"此处引用 Table X / Fig. X"，内容在 `figures_tables/tables.tex`
-
-**技术型素材迭代工作流**:
-1. 步骤④（交互填充）：用户与 Claude 交互 → 直接在 `X.md` 填充正文要点（公式、假设、命题、证明骨架、引用），过程中可反复调用 `/figure` 和 `/latex-table` 落实图表
-2. 步骤⑤（/method-audit）：方法论审计（基线完整性 + 对标 + 假设/模型/命题等七维度）→ 修复回写 X.md → 确认章节结构（reader-centered 顺序）→ 基于 benchmark 确定字数 → 生成字数分配表 → 必备元素验收 → 阶段转换 foundation→drafting
-3. `X.md` 是 /technical 的唯一素材源——X.md 的 `## 正文要点` + `## 写作蓝图` 决定 manuscript 正文的内容选择和段落组织
-
-**idea.md 规范**:
-- 修改必须先征得用户同意，不得自行回写
-- 保持文档结构不变，覆盖式更新内容（迭代历史由 git 追踪）
-- 只放"为什么"和"方向"，不含具体公式/推导/数值结果。违反则移至对应章节 md
-
-**跨章节一致性约束**:
-- RQ编号：idea.md §2 定义 → /narrative 生成的 \section{Introduction} 中展开 → /narrative 生成的 \section{Discussion} 中回应（manuscript.tex 内三处编号和措辞必须一致）
-- 贡献声明：idea.md §4 意图 → /narrative 生成的 \section{Discussion} 中论证（manuscript.tex 内逻辑对应）
-
-**研究推进顺序**：见全局 `~/.claude/CLAUDE.md` 中的"科研论文研究推进顺序"。
+技能不自动 commit；阶段结束时给出建议的提交范围与信息，由用户确认后执行。禁止用 `git checkout --`、`git clean` 作为恢复手段。

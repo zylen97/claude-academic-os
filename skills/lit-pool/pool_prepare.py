@@ -1,654 +1,352 @@
 #!/usr/bin/env python3
+"""Prepare the citation pool from tagged_reports/ (lit-pool step 1).
+
+Blocking: tag_report.md missing; tagged_reports/ not mirroring the review
+reports; invalid/missing labels; placeholder authors; bad or duplicate keys.
+Unique papers follow the shared rule in lit_common (DOI / WoS UT / first author +
+year + title[:80]); duplicates merge labels, reasons, directions; best tier wins.
+Citation keys: auth.lower + year + first content word initial, conflicts get
+b/c/... suffixes. Keys already present in literature_manifest.json are reused
+for the same paper, so a refresh does not renumber keys already cited.
+
+Output (all under _pool_runs/): pool_prepare.json and one prefilled template
+pool_agent{N}_raw.md per worker (<= --agent-limit paper-label assignments).
+Filled templates are kept on rerun when the assignment plan is unchanged;
+otherwise the old run files are moved to _archive/.
 """
-pool_prepare.py — 引用池预处理（lit-pool §1-2）
-
-从打完标签的 direction reports 中提取所有入选文献，
-跨方向去重，生成 citation key，按标签分组，计算 Agent 调度计划。
-
-替代主 Agent 的手动表格解析、去重、key 生成和 bin-packing。
-
-用法:
-    python3 pool_prepare.py \
-        --report-dir structure/2_literature/ \
-        --output-dir structure/2_literature/ \
-        --agent-limit 30
-
-输出:
-    1. stdout 结构化摘要 + 校验结果
-    2. _pool_prepare.json（结构化数据：去重后文献 + citation keys + 标签分组 + 调度计划）
-"""
+from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import math
 import re
 import sys
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
-# 中文拼音支持（可选依赖）
+
+def _shared() -> None:
+    for base in Path(__file__).resolve().parents:
+        for cand in (base / "shared", base / "_academic-shared" / "scripts"):
+            if (cand / "lit_common.py").is_file():
+                sys.path.insert(0, str(cand))
+                return
+    raise SystemExit("ERROR: lit_common.py not found (shared scripts directory)")
+
+
+_shared()
+import lit_common as lc  # noqa: E402
+import dispatch_plan as dp  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from format_pool_agents import parse_blocks  # noqa: E402
+
 try:
     from pypinyin import lazy_pinyin
     HAS_PINYIN = True
-except ImportError:
+except ImportError:  # pragma: no cover
     HAS_PINYIN = False
 
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-# 中文复姓列表
-_COMPOUND_SURNAMES = {
-    "欧阳", "司马", "上官", "诸葛", "司徒", "令狐", "宇文", "长孙",
-    "慕容", "皇甫", "东方", "端木", "公孙", "南宫", "独孤", "赫连",
-}
-
-# 中文常见虚词（用于标题首实词提取时跳过）
+POOL_DIR = "_pool_runs"
+RANK = {t: i for i, t in enumerate(lc.TIERS)}
+_COMPOUND_SURNAMES = {"欧阳", "司马", "上官", "诸葛", "司徒", "令狐", "宇文", "长孙",
+                      "慕容", "皇甫", "东方", "端木", "公孙", "南宫", "独孤", "赫连"}
 _CN_STOP = set("的了是在有和与及其对从以为被把将而也都能要不")
-
-
-def _is_cjk(char: str) -> bool:
-    """判断单个字符是否为 CJK 汉字。"""
-    return '\u4e00' <= char <= '\u9fff'
-
-
-def _has_cjk(s: str) -> bool:
-    """判断字符串是否包含 CJK 汉字。"""
-    return any(_is_cjk(c) for c in s)
-
-
-def chinese_surname_to_pinyin(name: str) -> str:
-    """中文姓氏转拼音。支持复姓（欧阳→ouyang）。
-    pypinyin 不可用时 fallback 到 Unicode 码位。"""
-    if not name:
-        return "unknown"
-    if not HAS_PINYIN:
-        return "cn" + format(ord(name[0]), 'x')
-    # 检查复姓
-    for cs in _COMPOUND_SURNAMES:
-        if name.startswith(cs):
-            result = ''.join(lazy_pinyin(cs))
-            if result:
-                return result
-    # 单姓
-    result = ''.join(lazy_pinyin(name[0]))
-    return result if result else "cn" + format(ord(name[0]), 'x')
-
-
-def chinese_title_initial(title: str) -> str:
-    """中文标题取首个实词的拼音首字母。"""
-    for ch in title:
-        if _is_cjk(ch) and ch not in _CN_STOP:
-            if HAS_PINYIN:
-                py = lazy_pinyin(ch)
-                return py[0][0] if py and py[0] else 'x'
-            else:
-                return 'x'
-    return 'x'
-
-
-# 英文常见停用词（用于 citation key 生成时跳过）
-STOP_WORDS = {
-    "a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or",
-    "is", "are", "was", "were", "be", "been", "by", "with", "from",
-    "as", "into", "through", "during", "before", "after", "between",
-    "how", "what", "when", "where", "which", "who", "whom", "why",
-    "do", "does", "did", "has", "have", "had", "can", "could",
-    "will", "would", "shall", "should", "may", "might", "must",
-    "not", "no", "nor", "but", "if", "then", "than", "so",
-    "its", "it", "this", "that", "these", "those",
-}
-
-
-def normalize_text(s: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace."""
-    s = s.lower().strip()
-    s = unicodedata.normalize("NFKD", s)
-    s = re.sub(r"[^\w\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def dedup_key(author: str, year: int, title: str) -> str:
-    """跨方向去重键：first_author(lower) + year + title[:40](normalized)."""
-    fa = author.split(",")[0].split(";")[0].strip().lower()
-    ti = normalize_text(title)[:40]
-    return f"{fa}|{year}|{ti}"
-
-
-def generate_citation_key(author: str, year: int, title: str) -> str:
-    """按全局规则生成 citation key: auth.lower + year + shorttitle(1,1)。
-    格式：第一作者姓氏小写 + 四位年份 + 标题首个实词首字母小写。
-    示例：
-      Akcomak (2023) "What drives network evolution?" → akcomak2023w
-      陶鸠 (2026) "价值创造与资源重构" → tao2026j
-      欧阳明 (2025) "数字化转型" → ouyang2025s
-    """
-    # 提取第一作者姓氏
-    fa_raw = author.split(",")[0].split(";")[0].strip()
-    # 去掉可能的名缩写（如 "Smith J." → "Smith"）
-    fa_raw = re.sub(r"\s+[A-Z]\.?$", "", fa_raw).strip()
-
-    # 判断是否中文作者
-    if _has_cjk(fa_raw):
-        fa = chinese_surname_to_pinyin(fa_raw)
-    else:
-        fa = fa_raw.lower()
-        fa = re.sub(r"[^a-z]", "", fa)
-
-    if not fa:
-        fa = "unknown"
-
-    # 提取标题首个实词的首字母（先尝试英文）
-    title_words = re.findall(r"[a-zA-Z]+", title.lower())
-    first_content_word = ""
-    for w in title_words:
-        if w not in STOP_WORDS:
-            first_content_word = w[0]
-            break
-    # 英文标题 fallback
-    if not first_content_word and title_words:
-        first_content_word = title_words[0][0]
-    # 中文标题 fallback
-    if not first_content_word:
-        if _has_cjk(title):
-            first_content_word = chinese_title_initial(title)
-        else:
-            first_content_word = "x"
-
-    return f"{fa}{year}{first_content_word}"
-
-
-def resolve_key_conflicts(keys: dict[str, str]) -> dict[str, str]:
-    """处理 citation key 冲突：同 key 追加 b/c/d... 后缀。
-    输入：{dedup_key: citation_key}
-    输出：{dedup_key: resolved_citation_key}
-    """
-    # 统计每个 citation key 出现次数
-    key_groups: dict[str, list[str]] = defaultdict(list)
-    for dk, ck in keys.items():
-        key_groups[ck].append(dk)
-
-    resolved = {}
-    for ck, dks in key_groups.items():
-        if len(dks) == 1:
-            resolved[dks[0]] = ck
-        else:
-            # 按 dedup_key 排序保证稳定
-            for i, dk in enumerate(sorted(dks)):
-                if i == 0:
-                    resolved[dk] = ck
-                else:
-                    suffix = chr(ord('b') + i - 1)  # b, c, d, ...
-                    resolved[dk] = f"{ck}{suffix}"
-
-    return resolved
-
-
-# ---------------------------------------------------------------------------
-# 解析 direction report（复用 tag_aggregate.py 的逻辑）
-# ---------------------------------------------------------------------------
-
-def parse_report(filepath: Path) -> list[dict]:
-    """从带标签的 direction report 中提取所有入选文献。"""
-    try:
-        with open(filepath, encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"WARNING: Cannot read {filepath}: {e}", file=sys.stderr)
-        return []
-
-    d_match = re.match(r"direction(\d+)", filepath.name)
-    direction = int(d_match.group(1)) if d_match else 0
-
-    # 提取方向名称（从标题行）
-    name_match = re.search(r"#\s*方向\d+[：:]\s*(.+?)(?:\s*文献|$)", content)
-    direction_name = name_match.group(1).strip() if name_match else f"方向{direction}"
-
-    papers = []
-    current_tier = None
-
-    for line in content.split("\n"):
-        if re.match(r"^##\s.*(核心文献|Core)", line, re.IGNORECASE):
-            current_tier = "core"
-        elif re.match(r"^##\s.*(重要文献|Important)", line, re.IGNORECASE):
-            current_tier = "important"
-        elif re.match(r"^##\s.*(备选文献|Backup)", line, re.IGNORECASE):
-            current_tier = "backup"
-
-        # 7列（带标签）
-        m7 = re.match(
-            r"\|\s*(\d+)\s*\|"
-            r"\s*([^|]+)\|"
-            r"\s*([^|]+)\|"
-            r"\s*(\d{4})\s*\|"
-            r"\s*([^|]+)\|"
-            r"\s*([^|]+)\|"
-            r"\s*([^|]+)\|",
-            line
-        )
-        if m7:
-            tags_raw = m7.group(6).strip()
-            # 去掉反引号，统一分隔符
-            tags_raw = tags_raw.replace("`", "")
-            tags_raw = tags_raw.replace("\\|", ";")
-            tags_raw = tags_raw.replace("\\", "")
-            if tags_raw.strip() in ("—", "-", "N/A", ""):
-                tags = []
-            else:
-                tags = [t.strip().rstrip("\\").strip() for t in re.split(r"[+,、/;|]", tags_raw) if t.strip().rstrip("\\").strip()]
-            papers.append({
-                "direction": direction,
-                "direction_name": direction_name,
-                "author": m7.group(2).strip(),
-                "title": m7.group(3).strip(),
-                "year": int(m7.group(4)),
-                "journal": m7.group(5).strip(),
-                "tags": tags,
-                "tier": current_tier or "backup",
-                "reason": m7.group(7).strip(),
-            })
-
-    return papers
-
-
-# ---------------------------------------------------------------------------
-# 去重 + citation key
-# ---------------------------------------------------------------------------
-
-TIER_ORDER = {"core": 0, "important": 1, "backup": 2}
-
-
-def deduplicate(all_papers: list[dict]) -> list[dict]:
-    """跨方向去重。同一文献保留最高分级，合并标签和来源方向。"""
-    seen: dict[str, dict] = {}
-
-    for p in all_papers:
-        dk = dedup_key(p["author"], p["year"], p["title"])
-        if dk not in seen:
-            seen[dk] = {
-                **p,
-                "source_directions": [p["direction"]],
-                "all_reasons": [p["reason"]],
-                "is_source": p.get("is_source", False),
-                "source_cite_key": p.get("source_cite_key", ""),
-            }
-        else:
-            existing = seen[dk]
-            # 保留最高分级
-            if TIER_ORDER.get(p["tier"], 2) < TIER_ORDER.get(existing["tier"], 2):
-                existing["tier"] = p["tier"]
-            # 合并标签
-            for tag in p["tags"]:
-                if tag not in existing["tags"]:
-                    existing["tags"].append(tag)
-            # 合并来源方向
-            if p["direction"] not in existing["source_directions"]:
-                existing["source_directions"].append(p["direction"])
-            # 合并理由
-            if p["reason"] not in existing["all_reasons"]:
-                existing["all_reasons"].append(p["reason"])
-            # 保留源项目溯源信息（无论哪方先出现）
-            if p.get("is_source") and not existing.get("is_source"):
-                existing["is_source"] = True
-            if p.get("source_cite_key") and not existing.get("source_cite_key"):
-                existing["source_cite_key"] = p["source_cite_key"]
-
-    # 生成 citation key
-    raw_keys = {}
-    placeholder_authors = {"unknown", "unk", "n/a", "na", "tbd", "anon", "anonymous", ""}
-    placeholder_count = 0
-    for dk, p in seen.items():
-        author = str(p.get("author", "")).strip()
-        if author.lower() in placeholder_authors:
-            placeholder_count += 1
-            print(
-                f"  ⚠ placeholder author '{author}' → key will be 'unknown...' "
-                f"[{p.get('year','?')}] {str(p.get('title',''))[:60]}",
-                file=sys.stderr,
-            )
-        raw_keys[dk] = generate_citation_key(p["author"], p["year"], p["title"])
-
-    if placeholder_count > 0:
-        print(
-            f"\n  ⚠ {placeholder_count} paper(s) have placeholder author → unknown* citation keys.\n"
-            f"    Root cause: subagent failed to parse AU field from RIS. Fix upstream in batch raw files,\n"
-            f"    then re-run format_batches.py + merge_screening.py + pool_prepare.py.",
-            file=sys.stderr,
-        )
-
-    resolved_keys = resolve_key_conflicts(raw_keys)
-
-    # 附加 citation key
-    result = []
-    for dk, p in seen.items():
-        p["citation_key"] = resolved_keys[dk]
-        p["dedup_key"] = dk
-        result.append(p)
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# 按标签分组 + 贪心合并
-# ---------------------------------------------------------------------------
-
-def group_by_tag(papers: list[dict]) -> dict[str, list[dict]]:
-    """按标签分组（一篇文献可出现在多个标签组）。"""
-    groups: dict[str, list[dict]] = defaultdict(list)
-    for p in papers:
-        for tag in p["tags"]:
-            groups[tag].append(p)
-    return dict(groups)
-
-
-def plan_agents(tag_groups: dict[str, list[dict]], limit: int) -> list[dict]:
-    """按标签分组计算 agent 调度，小标签贪心合并。"""
-    agents = []
-    agent_id = 1
-
-    large_tags = {}
-    small_tags = {}
-
-    for tag, papers in sorted(tag_groups.items()):
-        n = len(papers)
-        if n == 0:
-            continue
-        if n > limit // 2:  # > 15 的算大
-            large_tags[tag] = papers
-        else:
-            small_tags[tag] = papers
-
-    # 大标签：按 limit 拆分
-    for tag, papers in large_tags.items():
-        n = len(papers)
-        n_agents = math.ceil(n / limit)
-        per_agent = math.ceil(n / n_agents)
-
-        # 按来源方向分段
-        for i in range(n_agents):
-            start = i * per_agent
-            end = min((i + 1) * per_agent, n)
-            batch = papers[start:end]
-            src_dirs = sorted(set(d for p in batch for d in p.get("source_directions", [p.get("direction")])))
-            agents.append({
-                "agent_id": agent_id,
-                "tags": [tag],
-                "item_count": len(batch),
-                "split_info": f"拆分{i + 1}/{n_agents}" if n_agents > 1 else "独立",
-                "source_directions": src_dirs,
-                "paper_keys": [p["citation_key"] for p in batch],
-            })
-            agent_id += 1
-
-    # 小标签：贪心合并
-    if small_tags:
-        sorted_small = sorted(small_tags.items(), key=lambda x: len(x[1]), reverse=True)
-        bins: list[dict] = []
-
-        for tag, papers in sorted_small:
-            n = len(papers)
-            placed = False
-            for b in bins:
-                if b["item_count"] + n <= limit:
-                    b["tags"].append(tag)
-                    b["item_count"] += n
-                    b["paper_keys"].extend(p["citation_key"] for p in papers)
-                    src = set(b.get("source_directions", []))
-                    for p in papers:
-                        src.update(p.get("source_directions", [p.get("direction")]))
-                    b["source_directions"] = sorted(src)
-                    placed = True
-                    break
-            if not placed:
-                src_dirs = sorted(set(d for p in papers for d in p.get("source_directions", [p.get("direction")])))
-                bins.append({
-                    "tags": [tag],
-                    "item_count": n,
-                    "source_directions": src_dirs,
-                    "paper_keys": [p["citation_key"] for p in papers],
-                })
-
-        for b in bins:
-            b["agent_id"] = agent_id
-            b["split_info"] = "合并" if len(b["tags"]) > 1 else "独立"
-            agents.append(b)
-            agent_id += 1
-
-    return agents
-
-
-# ---------------------------------------------------------------------------
-# 校验
-# ---------------------------------------------------------------------------
-
+STOP_WORDS = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or", "is", "are", "was",
+              "were", "be", "been", "by", "with", "from", "as", "into", "through", "during", "before",
+              "after", "between", "how", "what", "when", "where", "which", "who", "whom", "why", "do",
+              "does", "did", "has", "have", "had", "can", "could", "will", "would", "shall", "should",
+              "may", "might", "must", "not", "no", "nor", "but", "if", "then", "than", "so", "its", "it",
+              "this", "that", "these", "those"}
+PLACEHOLDER_AUTHORS = {"unknown", "unk", "n/a", "na", "tbd", "anon", "anonymous", ""}
 CK_PATTERN = re.compile(r"^[a-z][a-z0-9]*\d{4}[a-z][a-z]?$")
 
 
-def verify(papers: list[dict], tag_groups: dict[str, list[dict]],
-           agents: list[dict], all_papers_raw: list[dict]) -> list[str]:
-    """内建校验。"""
-    errors = []
+# ---- citation keys (names kept for source_bib_to_pool.py) -------------------
 
-    # 1. citation key 格式校验
-    for p in papers:
-        ck = p.get("citation_key", "")
-        if not CK_PATTERN.match(ck):
-            errors.append(f"KEY_FORMAT: '{ck}' for '{p['author']}({p['year']})' does not match pattern")
-
-    # 2. citation key 全局唯一
-    key_set: dict[str, list[str]] = defaultdict(list)
-    for p in papers:
-        key_set[p["citation_key"]].append(f"{p['author']}({p['year']})")
-    for ck, owners in key_set.items():
-        if len(owners) > 1:
-            errors.append(f"KEY_DUPLICATE: '{ck}' used by: {', '.join(owners)}")
-
-    # 3. 每篇文献至少有 1 个标签
-    no_tag = [p for p in papers if not p.get("tags")]
-    if no_tag:
-        errors.append(f"NO_TAGS: {len(no_tag)} papers have no tags")
-
-    # 4. agent 调度一致性（每个标签的文献都被分配到 agent）
-    for tag, tag_papers in tag_groups.items():
-        agent_keys = set()
-        for a in agents:
-            if tag in a["tags"]:
-                agent_keys.update(a.get("paper_keys", []))
-        paper_keys = {p["citation_key"] for p in tag_papers}
-        missing = paper_keys - agent_keys
-        if missing:
-            errors.append(f"AGENT_MISSING: tag={tag}, {len(missing)} papers not assigned to any agent")
-
-    # 5. 去重前后数量关系
-    if len(papers) > len(all_papers_raw):
-        errors.append(f"DEDUP_ERROR: deduped={len(papers)} > raw={len(all_papers_raw)}")
-
-    return errors
+def _has_cjk(s: str) -> bool:
+    return lc._has_cjk(s)
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
+def normalize_text(s: str) -> str:
+    return lc.norm_text(s)
 
-def main():
-    parser = argparse.ArgumentParser(description="Prepare citation pool data")
-    parser.add_argument("--report-dir", required=True,
-                        help="Directory containing tagged direction*_report.md files")
-    parser.add_argument("--output-dir", required=True,
-                        help="Directory for output JSON")
-    parser.add_argument("--agent-limit", type=int, default=30,
-                        help="Agent item limit (default: 30)")
-    parser.add_argument("--source-pool", default=None,
-                        help="Path to _source_pool.json (source project citations, for dissertation projects)")
-    args = parser.parse_args()
 
-    report_dir = Path(args.report_dir)
-    output_dir = Path(args.output_dir)
+def dedup_key(author: str, year: int, title: str) -> str:
+    """Author/year/title part of the shared identity (used by source_bib_to_pool)."""
+    return f"{normalize_text(lc.surname(author))}|{year}|{normalize_text(title)[:80]}"
 
-    # 1. 扫描 reports
-    report_files = sorted(report_dir.glob("direction*_report.md"))
-    if not report_files:
-        print("ERROR: No direction reports found", file=sys.stderr)
-        sys.exit(1)
 
-    all_papers_raw = []
-    for fp in report_files:
-        papers = parse_report(fp)
-        all_papers_raw.extend(papers)
-        print(f"  Parsed {fp.name}: {len(papers)} papers", file=sys.stderr)
+def chinese_surname_to_pinyin(name: str) -> str:
+    if not name:
+        return "unknown"
+    if not HAS_PINYIN:
+        return "cn" + format(ord(name[0]), "x")
+    for cs in _COMPOUND_SURNAMES:
+        if name.startswith(cs):
+            return "".join(lazy_pinyin(cs)) or "cn" + format(ord(name[0]), "x")
+    return "".join(lazy_pinyin(name[0])) or "cn" + format(ord(name[0]), "x")
 
-    if not all_papers_raw and not args.source_pool:
-        print("ERROR: No papers found in reports", file=sys.stderr)
-        sys.exit(1)
 
-    # 1.5 合并源项目文献（学位论文项目）
-    source_count = 0
-    if args.source_pool:
-        try:
-            with open(args.source_pool, encoding="utf-8") as f:
-                source_data = json.load(f)
-            source_project = source_data.get("source_project", "unknown")
-            for p in source_data.get("papers", []):
-                all_papers_raw.append({
-                    "direction": 0,  # 源项目 = direction 0
-                    "direction_name": f"源项目({source_project})",
-                    "author": p["author"],
-                    "title": p["title"],
-                    "year": p["year"],
-                    "journal": p.get("journal", ""),
-                    "tags": p.get("tags", []),
-                    "tier": p.get("tier", "important"),
-                    "reason": f"源项目引用（{'、'.join(c.get('section', '') for c in p.get('citation_contexts', [])[:2])}）",
-                    "source_cite_key": p.get("source_cite_key", ""),
-                    "is_source": True,
-                })
-                source_count += 1
-            print(f"  Source pool: {source_count} papers from {source_project}",
-                  file=sys.stderr)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"WARNING: Cannot read source pool {args.source_pool}: {e}",
-                  file=sys.stderr)
+def chinese_title_initial(title: str) -> str:
+    for ch in title:
+        if "一" <= ch <= "鿿" and ch not in _CN_STOP:
+            if HAS_PINYIN:
+                py = lazy_pinyin(ch)
+                return py[0][0] if py and py[0] else "x"
+            return "x"
+    return "x"
 
-    # 2. 去重 + citation key
-    papers = deduplicate(all_papers_raw)
 
-    # 3. 按标签分组
-    tag_groups = group_by_tag(papers)
+def generate_citation_key(author: str, year: int, title: str) -> str:
+    """auth.lower + year + shorttitle(1,1): smith2024w, tao2026j, ouyang2025s."""
+    fa_raw = lc.surname(author)
+    fa_raw = re.sub(r"\s+[A-Z]\.?$", "", fa_raw).strip()
+    if _has_cjk(fa_raw):
+        fa = chinese_surname_to_pinyin(fa_raw)
+    else:
+        fa = re.sub(r"[^a-z]", "", lc.norm_text(fa_raw).replace(" ", ""))
+    fa = fa or "unknown"
+    words = re.findall(r"[a-zA-Z]+", title.lower())
+    initial = next((w[0] for w in words if w not in STOP_WORDS), words[0][0] if words else "")
+    if not initial:
+        initial = chinese_title_initial(title) if _has_cjk(title) else "x"
+    return f"{fa}{year}{initial}"
 
-    # 4. Agent 调度
-    agents = plan_agents(tag_groups, args.agent_limit)
 
-    # 5. 校验
-    errors = verify(papers, tag_groups, agents, all_papers_raw)
+def resolve_key_conflicts(keys: dict[str, str], taken: set[str] | None = None) -> dict[str, str]:
+    """{identity: raw_key} -> unique keys; second and later get b, c, ... (stable order)."""
+    taken = set(taken or ())
+    groups: dict[str, list[str]] = defaultdict(list)
+    for ident, ck in keys.items():
+        groups[ck].append(ident)
+    out: dict[str, str] = {}
+    for ck, idents in groups.items():
+        suffixes = iter([""] + [chr(c) for c in range(ord("b"), ord("z") + 1)])
+        for ident in sorted(idents):
+            cand = ck + next(suffixes)
+            while cand in taken:
+                cand = ck + next(suffixes)
+            out[ident] = cand
+            taken.add(cand)
+    return out
 
-    # 6. 写出 JSON
-    json_path = str(output_dir / "_pool_prepare.json")
 
-    # 构建 citation key 映射表（供 subAgent 使用）
-    key_map = []
-    for i, p in enumerate(papers, 1):
-        entry = {
-            "seq": i,
-            "citation_key": p["citation_key"],
-            "author": p["author"],
-            "year": p["year"],
-            "title": p["title"],
-            "journal": p["journal"],
-            "tags": p["tags"],
-            "tier": p["tier"],
-            "reason": p.get("reason", ""),
-            "source_directions": p.get("source_directions", []),
+# ---- corpus ---------------------------------------------------------------
+
+def read_rq_count(tag_report: Path) -> int:
+    m = re.search(r"\*\*RQ 数\*\*:\s*(\d+)", lc.read_text(tag_report))
+    if not m:
+        raise ValueError("TAG_REPORT_OUTDATED: tag_report.md has no 'RQ 数' line (rerun tag_aggregate.py)")
+    return int(m.group(1))
+
+
+def load_corpus(lit_dir: Path, source_pool: Path | None) -> tuple[list[dict], list[str], list[str]]:
+    errors, warnings = [], []
+    tag_report = lit_dir / "tag_report.md"
+    if not tag_report.exists():
+        return [], ["TAG_REPORT_MISSING: run lit-tag (tag_aggregate.py) first"], []
+    errors += lc.compare_tagged_to_review(lit_dir)
+    allowed = lc.allowed_labels(read_rq_count(tag_report))
+    tagged = lc.active_tagged_reports(lit_dir)
+    newest = max((p.stat().st_mtime for p in tagged.values()), default=0)
+    if newest > tag_report.stat().st_mtime + 1:
+        warnings.append("tag_report.md is older than tagged_reports/ (rerun tag_aggregate.py)")
+    rows: list[dict] = []
+    for d, path in sorted(tagged.items()):
+        for r in lc.report_papers(path):
+            labels = lc.split_labels(r.get("tags"))
+            bad = [t for t in labels if t not in allowed]
+            if r["ncols"] != 7 or not labels or bad:
+                errors.append(f"TAG_INVALID: D{d} {r['tier']}:{r['row']} {r.get('tags')!r}")
+                continue
+            r["labels"] = labels
+            r["is_source"] = False
+            rows.append(r)
+    if source_pool:
+        data = json.loads(source_pool.read_text(encoding="utf-8"))
+        for p in data.get("papers", []):
+            labels = [t for t in p.get("tags", []) if t in allowed]
+            rows.append({"direction": 0, "tier": p.get("tier", "important"), "row": 0,
+                         "author": p["author"], "title": p["title"], "year": str(p["year"]),
+                         "journal": p.get("journal", ""), "labels": labels or ["LR"],
+                         "reason": f"源项目引用（{data.get('source_project', '')}）",
+                         "doi": p.get("doi", ""), "database_id": "", "source_type": "source_project",
+                         "source_file": "", "record_id": "", "is_source": True,
+                         "source_cite_key": p.get("source_cite_key", "")})
+    return rows, errors, warnings
+
+
+def merge_papers(rows: list[dict], old_keys: dict[str, str]) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+    papers: list[dict] = []
+    for group in lc.group_duplicates(rows):
+        best = rows[min(group, key=lambda i: (RANK.get(rows[i]["tier"], 1), i))]
+        occ = [rows[i] for i in group]
+        labels: list[str] = []
+        for r in occ:
+            labels += [t for t in r["labels"] if t not in labels]
+        p = {
+            "author": best["author"], "year": str(best["year"]), "title": best["title"],
+            "journal": best["journal"], "tier": best["tier"], "tags": labels,
+            "doi": next((r["doi"] for r in occ if r.get("doi")), ""),
+            "database_id": next((r["database_id"] for r in occ if r.get("database_id")), ""),
+            "reasons": list(dict.fromkeys(r["reason"] for r in occ if r.get("reason"))),
+            "directions": sorted({r["direction"] for r in occ if r["direction"]}),
+            "records": [{"direction": r["direction"], "tier": r["tier"], "row": r["row"], "title": r["title"],
+                         "source_type": r["source_type"], "source_file": r["source_file"],
+                         "record_id": r["record_id"], "doi": r.get("doi", "")}
+                        for r in occ if not r["is_source"]],
+            "is_source": any(r["is_source"] for r in occ),
+            "source_cite_key": next((r.get("source_cite_key") for r in occ if r.get("source_cite_key")), ""),
+            "identity": lc.identity_keys(best)[-1] if lc.identity_keys(best) else best["title"],
         }
-        # 保留源项目 cite key（供 ris2bib.py 从源 bib 复制条目）
-        if p.get("source_cite_key"):
-            entry["source_cite_key"] = p["source_cite_key"]
-        if p.get("is_source"):
-            entry["is_source"] = True
-        key_map.append(entry)
+        types = {r["source_type"] for r in occ}
+        p["source_origin"] = ("source_project" if p["is_source"] else
+                              "OpenAlex supplement" if types == {"openalex"} else "lit-workflow")
+        if p["author"].strip().lower() in PLACEHOLDER_AUTHORS:
+            errors.append(f"PLACEHOLDER_AUTHOR: {p['title'][:60]}")
+        if not re.fullmatch(r"\d{4}", p["year"]):
+            errors.append(f"YEAR_INVALID: {p['author']} {p['title'][:60]}")
+        reuse = next((old_keys[k] for r in occ for k in lc.identity_keys(r) if k in old_keys), "")
+        p["citation_key"] = reuse
+        papers.append(p)
+    use = defaultdict(int)
+    for p in papers:
+        use[p["citation_key"]] += 1
+    for p in papers:  # two current papers matched the same old key: neither reuses it
+        if p["citation_key"] and use[p["citation_key"]] > 1:
+            p["citation_key"] = ""
+    reused = {p["citation_key"] for p in papers if p["citation_key"]}
+    raw = {p["identity"]: generate_citation_key(p["author"], p["year"], p["title"])
+           for p in papers if not p["citation_key"]}
+    resolved = resolve_key_conflicts(raw, taken=reused)
+    for p in papers:
+        if not p["citation_key"]:
+            p["citation_key"] = resolved[p["identity"]]
+    seen: dict[str, int] = defaultdict(int)
+    for p in papers:
+        seen[p["citation_key"]] += 1
+        if not CK_PATTERN.match(p["citation_key"]) or p["citation_key"].startswith("unknown"):
+            errors.append(f"KEY_FORMAT: {p['citation_key']!r} for {p['author']} ({p['year']})")
+    errors += [f"KEY_DUPLICATE: {k}" for k, n in seen.items() if n > 1]
+    return papers, errors
 
-    output_data = {
-        "total_raw": len(all_papers_raw),
-        "total_deduped": len(papers),
-        "duplicates_removed": len(all_papers_raw) - len(papers),
-        "papers": key_map,
-        "tag_groups": [
-            {
-                "tag": tag,
-                "count": len(tag_papers),
-                "source_directions": sorted(set(
-                    d for p in tag_papers
-                    for d in p.get("source_directions", [p.get("direction")])
-                )),
-            }
-            for tag, tag_papers in sorted(tag_groups.items())
-        ],
-        "agents": agents,
-    }
 
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
+def plan_agents(papers: list[dict], limit: int) -> list[dict]:
+    """Assignments = (label, key) pairs; large labels split, small labels bin-packed."""
+    by_tag: dict[str, list[str]] = defaultdict(list)
+    for p in papers:
+        for t in p["tags"]:
+            by_tag[t].append(p["citation_key"])
+    agents: list[dict] = []
+    small = []
+    for tag, keys in sorted(by_tag.items()):
+        if len(keys) > limit // 2:
+            n = math.ceil(len(keys) / limit)
+            per = math.ceil(len(keys) / n)
+            for i in range(n):
+                agents.append({"assignments": [[tag, k] for k in keys[i * per:(i + 1) * per]]})
+        else:
+            small.append((tag, keys))
+    bins: list[dict] = []
+    for tag, keys in sorted(small, key=lambda x: (-len(x[1]), x[0])):
+        target = next((b for b in bins if len(b["assignments"]) + len(keys) <= limit), None)
+        if target is None:
+            target = {"assignments": []}
+            bins.append(target)
+        target["assignments"] += [[tag, k] for k in keys]
+    agents += bins
+    for i, a in enumerate(agents, 1):
+        a["agent_id"] = i
+        a["raw_file"] = f"pool_agent{i}_raw.md"
+        a["formatted_file"] = f"pool_agent{i}.md"
+        a["tags"] = sorted({t for t, _ in a["assignments"]})
+    return agents
 
-    # ===== 生成模板文件（模板填空 + 结构分离） =====
-    POOL_TEMPLATE = (
-        "（逐条添加文献，严格按以下格式。不要添加任何 # 标题行。）\n\n"
-        "### paper1\n"
-        "- 标签: {{标签名，如 BG / GAP-RQ1 / METHOD-先例}}\n"
-        "- citation_key: {{原样复制，不可修改}}\n"
-        "- 分级: {{核心/重要/备选}}\n"
-        "- 作者: {{作者}}\n"
-        "- 年份: {{4位数字}}\n"
-        "- 引用场景: {{中文描述}}\n"
-        "- 期刊: {{从报告原样复制完整期刊名，不要缩写}}\n"
-    )
-    tpl_count = 0
-    for a in agents:
-        agent_id = a["agent_id"]
-        tpl_path = output_dir / f"_tmp_pool_agent{agent_id}_raw.md"
-        tpl_path.write_text(POOL_TEMPLATE, encoding="utf-8")
-        tpl_count += 1
-    print(f"Templates generated: {tpl_count} files", file=sys.stderr)
 
-    # ===== stdout 结构化摘要 =====
-    print(f"=== POOL PREPARE ===")
-    print(f"Reports parsed: {len(report_files)}")
-    print(f"Raw papers: {len(all_papers_raw)}")
-    print(f"After dedup: {len(papers)}")
-    print(f"Duplicates removed: {len(all_papers_raw) - len(papers)}")
-    print()
+def template(agent: dict, by_key: dict[str, dict], carry: dict | None = None) -> str:
+    lines = [f"<!-- lit-pool-agent: {agent['agent_id']} -->",
+             f"# 引用池 worker {agent['agent_id']}（{len(agent['assignments'])} 条：{'、'.join(agent['tags'])}）", "",
+             "填写说明：只填写每条的“引用场景”（中文，写作视角：这篇可以支撑什么论点）；",
+             "COMP 条目在引用场景中加“；关键差异：…”。不得改动其他行，不得增删条目。", ""]
+    for n, (tag, key) in enumerate(agent["assignments"], 1):
+        p = by_key[key]
+        lines += [f"### paper{n}", f"- 标签: {tag}", f"- citation_key: {key}",
+                  f"- 分级: {lc.TIER_CN.get(p['tier'], p['tier'])}", f"- 作者: {p['author']}",
+                  f"- 年份: {p['year']}", f"- 期刊: {p['journal']}", f"- 标题: {p['title']}",
+                  f"- 入选理由: {'；'.join(p['reasons'])[:300]}",
+                  f"- 引用场景: {(carry or {}).get((tag, key), '')}", ""]
+    return "\n".join(lines) + "\n"
 
-    # 标签分组
-    print("Tag groups:")
-    for tag in sorted(tag_groups):
-        print(f"  {tag}: {len(tag_groups[tag])} papers")
-    print()
 
-    # Citation key 样本
-    print("Citation key samples (first 5):")
-    for p in papers[:5]:
-        print(f"  {p['citation_key']} ← {p['author']} ({p['year']}) \"{p['title'][:50]}...\"")
-    print()
-
-    # Agent 调度表
-    print(f"Agent dispatch ({len(agents)} agents):")
-    print("| Agent# | 标签 | 条目数 | 拆分 |")
-    print("|:------:|:-----|:------:|:----:|")
-    for a in agents:
-        tags_str = "+".join(a["tags"])
-        print(f"| {a['agent_id']} | {tags_str} | {a['item_count']} | {a['split_info']} |")
-    print()
-
-    # 校验结果
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--lit-dir", required=True, help="structure/2_literature")
+    ap.add_argument("--agent-limit", type=int, default=30)
+    ap.add_argument("--source-pool", help="_source_pool.json from source_bib_to_pool.py (dissertations)")
+    args = ap.parse_args()
+    lit_dir = Path(args.lit_dir)
+    run = lit_dir / POOL_DIR
+    try:
+        rows, errors, warnings = load_corpus(lit_dir, Path(args.source_pool) if args.source_pool else None)
+        old_keys: dict[str, str] = {}
+        manifest = lit_dir / "literature_manifest.json"
+        if manifest.exists():
+            for p in json.loads(manifest.read_text(encoding="utf-8")).get("papers", []):
+                for k in lc.identity_keys(p):
+                    old_keys.setdefault(k, p["citation_key"])
+        papers, key_errors = merge_papers(rows, old_keys) if not errors else ([], [])
+        errors += key_errors
+        if not papers and not errors:
+            errors.append("NO_PAPERS: tagged_reports/ is empty")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        errors, warnings, papers = [str(exc)], [], []
+    for w in warnings:
+        print(f"⚠️ {w}")
     if errors:
         print("=== VERIFY: FAIL ===")
-        for e in errors:
+        for e in errors[:30]:
             print(f"  ❌ {e}")
-        sys.exit(1)
-    else:
-        print("=== VERIFY: PASS ===")
-        print(f"Output: {json_path}")
+        raise SystemExit(1)
+    papers.sort(key=lambda p: (RANK.get(p["tier"], 1), p["citation_key"]))
+    agents = plan_agents(papers, args.agent_limit)
+    by_key = {p["citation_key"]: p for p in papers}
+    data = {"created": dt.date.today().isoformat(), "total_occurrences": len(rows),
+            "total_unique": len(papers), "papers": papers, "agents": agents}
+
+    old_plan = run / "pool_prepare.json"
+    carry: dict[tuple[str, str], str] = {}
+    if old_plan.exists():
+        old = json.loads(old_plan.read_text(encoding="utf-8"))
+        if [a["assignments"] for a in old.get("agents", [])] != [a["assignments"] for a in agents]:
+            for f in sorted(run.glob("pool_agent*_raw.md")):
+                for blk in parse_blocks(f.read_text(encoding="utf-8")):
+                    if blk.get("scene") and "{{" not in blk["scene"]:
+                        carry[(blk.get("tag", ""), blk.get("key", ""))] = blk["scene"]
+            for f in sorted(run.glob("pool_agent*.md")) + [old_plan]:
+                lc.archive(f, lit_dir)
+            print(f"NOTICE: assignment plan changed; previous _pool_runs files archived, {len(carry)} filled scenes carried over")
+    for a in agents:
+        path = run / a["raw_file"]
+        if not path.exists():
+            dp.atomic_write(path, template(a, by_key, carry))
+    dp.atomic_write(run / "pool_prepare.json", json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+    print("=== POOL PREPARE ===")
+    print(f"Occurrences: {len(rows)} -> unique papers: {len(papers)}")
+    counts = defaultdict(int)
+    for p in papers:
+        for t in p["tags"]:
+            counts[t] += 1
+    for t in sorted(counts):
+        print(f"  {t}: {counts[t]}")
+    print("| agent | 标签 | 条目 |")
+    for a in agents:
+        print(f"| {a['agent_id']} | {'+'.join(a['tags'])} | {len(a['assignments'])} |")
+    print("=== VERIFY: PASS ===")
+    print(f"Output: {run / 'pool_prepare.json'}")
 
 
 if __name__ == "__main__":

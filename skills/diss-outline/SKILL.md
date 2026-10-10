@@ -52,9 +52,9 @@ Section 3: Methodology → 行号范围 [L151-L280]
 ### 0.4 检查引用池（素材准备前置）
 
 **citation_pool 路径解析**（按优先级）：
-1. 本项目 CLAUDE.md 中定义的 citation_pool 路径（如已通过 /lit-pool 生成）
+1. 本项目 CLAUDE.md 中定义的 citation_pool 路径（如已通过 /lit-workflow 生成）
 2. 源项目路径下的 `structure/2_literature/citation_pool/`（从 CLAUDE.md 的「`源项目路径`」字段读取）
-3. 都不存在 → 提示用户先运行 /lit-pool
+3. 都不存在 → 提示用户先运行 /lit-workflow
 
 解析成功后，将实际路径记录为 `CITATION_POOL_PATH`（供 Step 2.5.1 和 2.5.6 引用）。
 
@@ -62,7 +62,7 @@ Section 3: Methodology → 行号范围 [L151-L280]
 - **存在** → 标记 `CITATION_POOL_AVAILABLE = true`，记录可用标签文件列表
 - **不存在** → 标记 `CITATION_POOL_AVAILABLE = false`，在对话中提示用户：
   > ⚠️ 未检测到引用池（citation_pool/），步骤 2.5 的素材准备将跳过。
-  > 建议先运行 `/lit-pool` 生成引用池，以提高新增/展开节的写作质量。
+  > 建议先运行 `/lit-workflow` 生成引用池，以提高新增/展开节的写作质量。
   >
   > 是否继续生成结构大纲（不含素材准备）？
 
@@ -261,9 +261,7 @@ chapters/
 
 ### 2.3 Git Checkpoint（结构大纲 + .tex 注释）
 
-```bash
-git add chapters/ch{N}_outline.md chapters/ch{N}.tex && git commit -m "diss-outline: ch{N} structural outline confirmed"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-outline: ch{N} structural outline confirmed`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 > **注意**：material.md 在步骤 2.5 才生成，不在此处 add。素材文件的 git checkpoint 在步骤 2.5.5。
 
@@ -286,7 +284,7 @@ git add chapters/ch{N}_outline.md chapters/ch{N}.tex && git commit -m "diss-outl
 | 对策建议 | LR.md, DISC.md |
 | 结论 | 无（改写为主，跳过本步骤） |
 
-如 citation_pool 目录不存在 → 跳过本步骤，在对话中提示"建议先运行 /lit-pool 生成引用池"。
+如 citation_pool 目录不存在 → 跳过本步骤，在对话中提示"建议先运行 /lit-workflow 生成引用池"。
 
 **大文件分流策略**：citation_pool 各标签文件大小差异巨大（BG ~50篇、LR ~160篇、METHOD ~46篇）。当某个文件过大时，主 agent 无法一次性读取，需委托 subAgent 处理匹配。
 
@@ -354,7 +352,7 @@ git add chapters/ch{N}_outline.md chapters/ch{N}.tex && git commit -m "diss-outl
 
 主 agent 收到 subAgent 结果后，与直接读取的小文件匹配结果合并，统一进入步骤 2.5.3 组装素材包。
 
-> **为什么不拆分 LR.md 文件**：LR.md 是 `/lit-pool` 的产出物，按标签组织是其设计意图。拆分会破坏下游工具的兼容性。用 subAgent 读取是对上游产出的无侵入适配。
+> **为什么不拆分 LR.md 文件**：LR.md 是 lit-pool 阶段的产出物，按标签组织是其设计意图。拆分会破坏下游工具的兼容性。用 subAgent 读取是对上游产出的无侵入适配。
 
 ### 2.5.3 组装素材包
 
@@ -420,22 +418,20 @@ git add chapters/ch{N}_outline.md chapters/ch{N}.tex && git commit -m "diss-outl
 
 ### 2.5.5 Git Checkpoint（素材文件）
 
-素材准备完成后，单独 commit material 文件：
+素材准备完成后，material 文件单独作为一个 checkpoint：
 
-```bash
-git add chapters/ch{N}_material.md && git commit -m "diss-outline: ch{N} material prepared"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-outline: ch{N} material prepared`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### 2.5.6 同步参考文献（master.bib → 项目 bib）
 
 素材文件中引用的 citation key 必须在项目 bib 中可用，否则 `/diss-draft` 写入的 `\cite{}` 将无法编译。本步骤确保 bib 同步。
 
-> **设计原理**：英文论文工作流中，`/method-audit` 在 X.md 要点确认时同步 bib，`/narrative` 和 `/technical` 在写入 manuscript.tex 时再次同步。学位论文工作流中，`/diss-outline` 承担了等价职责，因此 bib 同步在此完成。
+> **设计原理**：英文论文工作流中，`/analysis` Plan/Release 锁定方法引用与证据来源，`/narrative` 和 `/technical` 在写入 manuscript.tex 时验证并同步 bib。学位论文工作流中，`/diss-outline` 承担素材阶段的等价引用同步职责。
 
 **执行逻辑**（幂等，多次运行安全）：
 
 1. 检查 `{CITATION_POOL_PATH}/master.bib` 是否存在（`{CITATION_POOL_PATH}` 沿用 Step 0.4 解析结果——可能是本项目 `structure/2_literature/citation_pool/` 或源项目对应路径，**不硬编码本地路径**，否则走源项目 fallback 时会永远 WARNING）
-   - 不存在 → WARNING: "master.bib 缺失，citation keys 可能无法解析。建议先运行 /lit-pool"，跳过本步骤
+   - 不存在 → WARNING: "master.bib 缺失，citation keys 可能无法解析。建议先运行 /lit-workflow"，跳过本步骤
 2. 读取项目 bib 文件（从 CLAUDE.md 提取路径，通常为 `reference.bib`）
 3. 提取项目 bib 中已有的所有 citation key（`@type{key,` 行）
 4. 读取 master.bib 全部条目
@@ -445,13 +441,11 @@ git add chapters/ch{N}_material.md && git commit -m "diss-outline: ch{N} materia
 
 > **为什么全量合并而非按需提取**：学位论文 100+ 引用 vs master.bib ~200 条，使用率 >50%。全量合并避免逐章追踪引用 key 的复杂性。biblatex 只输出实际 `\cite{}` 的条目，冗余条目不影响编译和参考文献列表。
 >
-> **改写节的隐性需求**：改写节没有 material 文件，但 sci-writer-zh 需要项目 bib 中的引用供选用。源项目文献在 `/lit-pool` Step 0.5 已收录到 master.bib，全量合并一并解决此需求。
+> **改写节的隐性需求**：改写节没有 material 文件，但 sci-writer-zh 需要项目 bib 中的引用供选用。源项目文献在 lit-pool 步骤 0（`source_bib_to_pool.py`）已收录到 master.bib，全量合并一并解决此需求。
 
 **Git Checkpoint**（含 bib 变更）：
 
-```bash
-git add {项目bib路径} && git commit -m "diss-outline: sync master.bib → reference.bib ({N} entries added)"
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-outline: sync master.bib → reference.bib ({N} entries added)`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 如 bib 无变更（全部 key 已存在），跳过 commit。
 
@@ -538,16 +532,13 @@ git add {项目bib路径} && git commit -m "diss-outline: sync master.bib → re
 
 ### 阶段转换：`literature → drafting`
 
-**转换时机**：Step 4 末尾、本 skill 所有章节 outline 均已用户确认且 CLAUDE.md 进度落地**之后**才执行（不是 Step 0 入场）。此举确保 /lit-plan / /lit-review / /lit-pool 在 literature 阶段下运行完毕，/diss-outline 是 literature → drafting 的唯一触发方。
+**转换时机**：Step 4 末尾、本 skill 所有章节 outline 均已用户确认且 CLAUDE.md 进度落地**之后**才执行（不是 Step 0 入场）。此举确保 /lit-plan / /lit-workflow 在 literature 阶段下运行完毕，/diss-outline 是 literature → drafting 的唯一触发方。
 
 如果当前项目阶段为 `literature`，更新为 `drafting`。
 
-### Git Checkpoint + Push（里程碑：大纲定稿）
+### Git Checkpoint（里程碑：大纲定稿）
 
-```bash
-git add -A && git commit -m "diss-outline: all chapter outlines confirmed + summary"
-git push
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-outline: all chapter outlines confirmed + summary`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ## 产出物清单
 

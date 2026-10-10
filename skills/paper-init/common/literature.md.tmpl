@@ -1,39 +1,42 @@
-# Literature Review — {ID}
+# Literature Review blueprint — {ID}
 
-> 对应 manuscript.tex §2 Literature review
-> 目标字数: TBD（由 /method-audit 基于 benchmark 确定，/narrative 分配各子节字数）
-
----
-
-## 必备元素
-
-1. **N个方向**（由 `/narrative` 步骤 1 交互确定）:
-   - 第一个方向 = 研究主题本身（最大主题/"因变量"）
-   - 后续方向 = 围绕主题的子议题，按文献发展逻辑组织（不是机械映射 RQ）
-   - 每个方向标注对应的 Gap 编号，确保所有 Gap 被覆盖
-   - 方向数量通常 3-5 个，取决于 Gap 数量和文献覆盖面
-
-2. **每个方向的内部结构**（写作蓝图，由 `/narrative` 步骤 2 交互确定）:
-   - **综述主体**（~85%）：按子主题展开，每个子主题分配 citation keys 并标注引用形式
-     - 形式A（主题驱动 `\citep{}`）：概括性综述，覆盖多篇文献
-     - 形式B（作者驱动 `\citet{}`）：highlight 关键文献的具体发现
-   - **指出不足 + 连接 Gap**（~15%）：末段约 50 词指出不足 + 一句话连接 Gap
-   - **落脚规则**：跨行业综述的方向，末尾子主题必须回溯到本文研究情境（至少 3-4 个要点），为"指出不足"建立扎实铺垫
-
-3. **每个方向末尾点明 Gap**: Gap 编号与 Introduction 一致
-
-4. **定位表**: 本文 vs 5-8 篇最相关文献的多维对比表（方法/情境/变量/发现）
+> 对应 manuscript.tex 的 Literature Review section。本文件是逻辑合约，不是正文：`/narrative section=literature` 先更新本文件并经用户确认，再写入 tex。
+> 状态: draft（用户确认后改为 confirmed（YYYY-MM-DD））
 
 ---
 
-## 大纲
+## 1 LR 类型与预算（由用户选择）
 
-TODO
+- 类型: TODO（`review_only` 1,400 词 / `review_plus_theory` 1,700 词 / `review_theory_hypothesis` 2,200 词）
+- 总预算: TODO（用户确认的覆盖值优先）
 
----
+## 2 主题架构（按 RQ 组织，不按引用池文件夹或时间顺序）
 
-## 引用池
-- **[主] LR** → 见 `2_literature/citation_pool/LR.md`
-- **[主] GAP-RQx** → 见 `2_literature/citation_pool/GAP.md`
-- **[次] METHOD** → 见 `2_literature/citation_pool/METHOD.md`
-- **[次] DISC-RQx** → 见 `2_literature/citation_pool/DISC.md`
+| # | 小节标题（英文） | 核心问题 | 段落任务 | 服务的 RQ | 所需证据类型 | 预算 |
+|---|---|---|---|---|---|---|
+| 1 | TODO | TODO | TODO | RQ? | TODO | TODO |
+
+## 3 理论（仅 review_plus_theory / review_theory_hypothesis）
+
+- 焦点理论镜头: TODO
+- 相邻理论 / 经验文献的角色: TODO
+
+## 4 假设（仅 review_theory_hypothesis）
+
+| H | 建模过程 | 机制链 | 情境桥接 | 竞争逻辑 | 对应的模型含义（estimand） | 方向 |
+|---|---|---|---|---|---|---|
+
+## 5 证据对应（每段）
+
+| 段落任务 | 代表研究（引用键） | 共识 / 差异 / 适用边界 | 与本文关系 |
+|---|---|---|---|
+
+## 6 文献定位
+
+- 已有定位资产（正文 / 附录 / 图表注册表）: TODO
+- 是否需要新建定位表: 否（需要时走 /build-intro-lit-table 与 /latex-table，不在 LR 内嵌未登记表格）
+
+## 7 引用池
+- [主] LR → `citation_pool/LR.md`；[主] GAP → `citation_pool/GAP.md`
+- [次] METHOD → `citation_pool/METHOD.md`；[次] COMP → `citation_pool/COMP.md`；[次] DISC → `citation_pool/DISC.md`
+- 池外文献：先回到 /lit-workflow 入池，未入池前不得引用

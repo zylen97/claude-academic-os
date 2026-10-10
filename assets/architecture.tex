@@ -45,11 +45,10 @@
   \fill[blue!10, rounded corners=4pt] (-0.55,-7.65) rectangle (16.15,-9.15);
   \node[layerlabel] at (-0.25,-7.95) {Layer 5: Quality Assurance \& Review};
   \node[qa] (writer) at (1.45,-8.5) {sci-writer\\EN / ZH};
-  \node[qa] (strict) at (4.1,-8.5) {strict-reviewer\\harsh audit};
-  \node[qa] (idearev) at (6.75,-8.5) {idea-reviewer\\method audit};
-  \node[qa] (polisher) at (9.4,-8.5) {language\\polish/audit};
-  \node[qa] (journal) at (12.05,-8.5) {journal-scout\\guidelines};
-  \node[qa] (peer) at (14.7,-8.5) {\texttt{/peer-review}\\review docx};
+  \node[qa] (idearev) at (4.45,-8.5) {idea-reviewer\\design audit};
+  \node[qa] (polisher) at (7.45,-8.5) {language\\polish/audit};
+  \node[qa] (journal) at (10.45,-8.5) {journal-scout\\guidelines};
+  \node[qa] (peer) at (13.45,-8.5) {\texttt{/peer-review}\\review docx};
 
   \fill[teal!10, rounded corners=4pt] (-0.55,-9.65) rectangle (16.15,-11.15);
   \node[layerlabel] at (-0.25,-9.95) {Layer 6: Knowledge Writing \& Dissemination};
@@ -66,6 +65,5 @@
   \draw[branch] (mine.south) -- ++(0,-0.35) -| (paper.north);
   \draw[branch] (paper.south) -- ++(0,-0.35) -| (writer.north);
   \draw[branch] (diss.south) -- ++(0,-0.35) -| (polisher.north);
-  \draw[branch] (fund.south) -- ++(0,-0.35) -| (strict.north);
 \end{tikzpicture}
 \end{document}

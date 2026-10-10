@@ -23,16 +23,12 @@ description: "模拟基金评审专家打分：按评审要点逐条审查基金
 - 从 `sections/` 目录读取各章节 md 文件（由 /fund-draft 生成）
 - 如申请书为其他格式（Word/PDF/LaTeX），按对应方式读取
 
-### Step 2: 调用 strict-reviewer subagent 做评审
+### Step 2: 主 agent 按基金专用 rubric 做评审
 
-**强制**：评审由 `strict-reviewer` subagent 执行，不由主 agent 直接完成。保证评审严厉度脱离主 agent 的人设切换（避免"温柔女友模式"对评审打分造成软化）。
+**强制**：进入独立的严厉基金评审口径，不受日常交流人设影响。必须逐项引用申请书证据并按下列 rubric 评分，不能用笼统评价代替审查。
 
 ```
-subagent_type: strict-reviewer
-model: opus
-（禁传 isolation 参数——全局红线）
-
-prompt:
+review instructions:
   你是资深基金评审专家（见过数百份申请书），以严厉但建设性的方式审查下列基金申请书。
 
   基金类型: {FUND_TYPE}          # nsfc / provincial / university
@@ -54,7 +50,7 @@ prompt:
   - 时态/语气按基金文体（研究目标/内容用"拟"/"将"，已有基础用"已"/"已经"）
 ```
 
-根据基金类型选择对应评审标准（注入到 subagent prompt）：
+根据基金类型选择对应评审标准：
 
 #### 国自然（NSFC）评审要点
 

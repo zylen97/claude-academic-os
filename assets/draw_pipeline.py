@@ -100,22 +100,24 @@ tx = PX[4] - 0.9
 # Narrative track (right sub-column)
 nx = PX[4] + 0.9
 
-# method-audit & method-end (technical)
-skill_box(ax, tx, 7.3, '/method-audit', 4, w=1.45)
-skill_box(ax, tx, 6.5, '/method-end', 4, w=1.45)
+# benchmark-first technical foundation and audited LaTeX release
+skill_box(ax, tx, 7.3, '/technical-md', 4, w=1.45)
+skill_box(ax, tx, 6.5, '/technical', 4, w=1.45)
 arrow(ax, tx, 7.04, tx, 6.76, color=PHASE_COLORS[4][1])
 
-# pen-outline (narrative)
-skill_box(ax, nx, 7.3, '/pen-outline', 4, w=1.45)
+# narrative sections
+skill_box(ax, nx, 7.3, '/narrative', 4, w=1.45)
 
-# Both merge into pen-draft
-skill_box(ax, PX[4], 5.6, '/pen-draft', 4)
+# Both merge in manuscript.tex
+skill_box(ax, PX[4], 5.6, 'manuscript.tex', 4)
 arrow(ax, tx, 6.24, PX[4] - 0.3, 5.86, color=PHASE_COLORS[4][1])
 arrow(ax, nx, 7.04, PX[4] + 0.3, 5.86, color=PHASE_COLORS[4][1])
 
-# pen-polish
-skill_box(ax, PX[4], 4.8, '/pen-polish', 4)
+# automated language polish
+skill_box(ax, PX[4], 4.8, '/polish', 4)
 arrow(ax, PX[4], 5.34, PX[4], 5.06, color=PHASE_COLORS[4][1])
+ax.text(PX[4], 4.35, 'language-polisher + 3 auditors',
+        ha='center', va='center', fontsize=6.5, color='#9E9E9E', style='italic')
 
 # Track labels
 ax.text(tx, 7.75, 'Technical', ha='center', va='center',
@@ -124,7 +126,7 @@ ax.text(nx, 7.75, 'Narrative', ha='center', va='center',
         fontsize=7, color='#999999')
 
 # Sub-agents annotation
-ax.text(PX[4], 5.2, 'journal-scout + sci-writer agents',
+ax.text(PX[4], 5.2, 'benchmark audit + technical text audit',
         ha='center', va='center', fontsize=6.5, color='#9E9E9E', style='italic')
 
 # ── Phase 5: Finalize ────────────────────────────────────
@@ -181,6 +183,8 @@ ax.text(8, 0.55, 'Each skill is invoked via /command in Claude Code  ·  No skip
 
 plt.tight_layout(pad=0.5)
 plt.savefig('/Users/zylen/.claude/assets/skills_pipeline.png', dpi=200,
+            bbox_inches='tight', facecolor='#FAFAFA')
+plt.savefig('/Users/zylen/.claude/assets/skills_pipeline.svg',
             bbox_inches='tight', facecolor='#FAFAFA')
 plt.close()
 print('Done – saved to assets/skills_pipeline.png')

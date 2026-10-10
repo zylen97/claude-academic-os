@@ -15,6 +15,12 @@
 !skills/*/
 !skills/paper-init/common/
 !skills/*/*.md
+!skills/*/references/
+!skills/*/references/*.md
+!skills/polish/references/
+!skills/polish/references/*.md
+!skills/polish/scripts/
+!skills/polish/scripts/*.py
 !skills/**/*.tmpl
 !skills/**/publishers/
 !skills/**/publishers/*/
@@ -33,6 +39,15 @@
 # scheduled/ → see github.com/zylen97/idea-scout/pipeline
 !skills_pipeline.pdf
 !skills_pipeline.tex
+
+# Track the whole skills tree (scripts, tests, profiles, templates, assets) except junk
+!skills/**
+skills/**/__pycache__/
+skills/**/*.pyc
+skills/**/.DS_Store
+# Licensed journal-ranking table used by lit-screen: provide locally, do not publish
+skills/lit-screen/data/
+skills/figure-harvest/claude_figure_harvest_backup/
 
 # Sensitive files — never track
 CLAUDE.md

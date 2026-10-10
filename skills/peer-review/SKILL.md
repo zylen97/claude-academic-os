@@ -1,12 +1,19 @@
 ---
-description: "作为期刊审稿人，阅读待审稿件PDF并按用户审稿风格自动生成审稿意见写入Word文档（Peer Review Generator）"
+description: "作为期刊审稿人，阅读待审稿件PDF并按用户审稿风格生成 defect-driven 的审稿意见写入Word文档（Peer Review Generator）"
 ---
 
 # Peer Review — 审稿意见生成器
 
-阅读当前工作目录中的待审稿件 PDF，识别期刊与研究主题，按用户一贯的审稿风格自动生成 12–15 条审稿意见（Major + Minor），写入同目录的 Word 文档。
+> 规格：`~/.claude/skills/shared/ACADEMIC-OS-LITE.md`（冲突以规格为准）。审查准入：`~/.claude/skills/shared/MANUSCRIPT-ECONOMY.md` 的 Review admission。
+> 子 agent：可以在需要时使用子 agent（定义在 `~/.claude/agents/`），并在执行前告诉用户将派出哪些。
+
+阅读当前工作目录中的待审稿件 PDF，识别期刊与研究主题，按用户一贯的审稿风格生成 defect-driven 的 Major/Minor 审稿意见，写入同目录的 Word 文档。意见数量由稿件中实际成立的缺陷决定，不设配额。
 
 **核心原则**：生成的意见必须严格遵循用户历史审稿风格，言之有物、具体到段落/行号，不说空话。
+
+完整读取并执行 `~/.claude/skills/shared/MANUSCRIPT-ECONOMY.md` 的
+Review admission。审查可以广泛，但正式意见只能报告有精确位置、真实缺陷、实质后果、尚未被稿件解决且存在
+最小可行修复的问题；不得把可设想的担忧、个人偏好或“作者还可以多做”包装成 Major comment。
 
 ## 输入说明
 
@@ -130,9 +137,9 @@ echo "Total pages: $TOTAL_PAGES"
 
 > ⚠️ **用户偏好（重要）**：方法论批评要**克制**。用户对统计/计量/技术方法的细节不精通，刻意避免 judge 自己不熟悉的方法细节。**优先用 Introduction/Literature/Discussion/Conclusion 的逻辑问题替代方法论 deep dive**——这些用户审稿经验深、判断准。
 >
-> - 方法部分最多 1 条 Major（且聚焦在"评估样本规模/案例代表性/评估周期"这类**逻辑层面**问题，不纠缠具体算法/统计技术）
+> - 方法问题不设数量指标；只报告自己能够用稿件内容或权威标准具体证实的逻辑/有效性缺陷，不纠缠不熟悉的算法或统计技术
 > - 不要出现 "DSR 框架不严谨"、"EFA 步骤缺失"、"共同方法偏差未检验"、"抽样偏差"这类专业方法学批评
-> - 腾出的条数给 Intro-Discussion alignment、理论贡献、文献对话等用户强项
+> - 不用叙述型意见替代或凑足方法意见；任何 section 都必须独立通过 Review admission 才能生成 comment
 
 以下审查点**仅作参考**，只在确信且有具体线索时提出：
 - **抽样方法**：样本代表性、选择偏差、样本量充分性
@@ -163,11 +170,13 @@ echo "Total pages: $TOTAL_PAGES"
 
 ## Step 2: 生成审稿意见
 
-### 2.1 意见数量与分类
+### 2.1 意见准入与分类
 
-生成 **12–15 条**审稿意见，按以下比例分配：
-- **Major comments**：8–10 条（涉及逻辑、理论、方法论、贡献等根本性问题）。每条 **40–70 words**，精准点出问题所在（引用具体页码/表格/图号）、为什么有问题、改进方向。可以适当解释，但必须简洁。禁止泛泛而谈（如"introduction needs improvement"），必须说清楚**哪里**有问题。
-- **Minor comments**：4–5 条（术语、格式、表述、引文等细节问题）。每条 **2–3 句话**即可，点到为止。
+意见数量完全由实际缺陷决定，不设置总数、Major 数或 section 配额，也不为了呈现“严格”而补足意见。
+
+- **Major comments**：仅限会实质损害核心论证、理论贡献、方法有效性、结果解释或投稿可接受性的缺陷。每条精准给出位置、问题、后果和最小修复；不存在合格缺陷时可以没有 Major。
+- **Minor comments**：明确影响可读性、一致性、格式或可核验性的局部问题。相关问题合并报告；纯审稿人口味和可选扩展默认省略。
+- 每个候选意见在写入前检查：精确位置、真实缺陷、实质后果、现稿是否已解决、最小修复。任一项不成立即不准入。
 
 ### 2.2 意见排列顺序
 
@@ -224,8 +233,8 @@ practical contributions].
 
 ### 2.4 特殊情况处理
 
-- **所有假设都显著**：质疑是否存在研究设计偏差或分析过程问题
-- **引言缺乏 practical problem**：这是用户最常指出的问题之一，必须重点关注
+- **所有假设都显著**：只有同时发现选择性报告、模型设定异常、结果矛盾或其他具体证据时才提出；显著本身不构成问题
+- **引言缺乏 practical problem**：作为优先检查角度；只有现稿确实存在且会损害定位时才报告
 - **文献综述只是 enumeration**：明确指出需要逻辑组织和批判性分析
 - **Discussion 与 Introduction 脱节**：检查引言承诺的理论贡献是否在讨论中兑现
 - **构念操作化与理论描述不一致**：这是严重问题，必须指出
@@ -338,7 +347,8 @@ Word 文档生成完毕后，在对话框中（**不写入 Word**）向用户给
 
 ## 附录：用户审稿风格特征总结
 
-以下是从用户 20+ 份历史审稿意见中提炼的风格特征，生成审稿意见时**必须严格遵循**：
+以下是从用户 20+ 份历史审稿意见中提炼的风格特征。它控制语气、排序和问题表达，不决定问题是否存在；
+Review admission 始终优先，任何历史高频角度都不得强制生成 comment：
 
 ### A. 结构模式
 
@@ -348,7 +358,7 @@ Word 文档生成完毕后，在对话框中（**不写入 Word**）向用户给
 | 意见编号 | 阿拉伯数字编号（1, 2, 3...），子问题用字母（a, b, c）或按章节分组 `(1) Introduction` `(2) Methodology` |
 | 意见顺序 | 严格按正文发展顺序 |
 | 结尾 | "After all, hope the authors all the best!" |
-| 意见数量 | 12–15 条 |
+| 意见数量 | 由实际缺陷决定；不设配额，相关 Minor 合并 |
 
 ### B. 常见开头段模板
 
@@ -363,7 +373,7 @@ Word 文档生成完毕后，在对话框中（**不写入 Word**）向用户给
 
 ### C. 高频批评模式（按出现频率排序）
 
-> **意见分配偏好**：Major 10 条中，Introduction/Literature/Discussion/Conclusion 相关应占 **5-6 条**（用户强项），方法论相关**最多 1 条**且聚焦评估逻辑而非技术细节。**Intro ↔ Discussion/Conclusion 一致性**是高频且犀利的批评角度，优先使用。
+> **意见选择偏好**：优先检查 Introduction/Literature/Discussion/Conclusion 的逻辑与一致性，方法论只在确信且有具体证据时评论。历史高频角度只决定检查顺序，不决定必须生成意见，更不得用于凑 section 或 Major 数量。**Intro ↔ Discussion/Conclusion 一致性**仍是优先核查角度。
 
 1. **引言缺乏 practical problem 驱动**（出现率 ~80%）
    - "The introduction contains excessive background information without efficiently transitioning to the specific practical problem"

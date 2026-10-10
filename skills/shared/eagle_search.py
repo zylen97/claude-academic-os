@@ -78,6 +78,7 @@ def cmd_search(args):
                     "image_path": img["image_path"],
                     "thumbnail_path": img["thumbnail_path"],
                     "palettes": img.get("palettes", []),
+                    "mtime": img.get("mtime", 0),
                 }
             )
 

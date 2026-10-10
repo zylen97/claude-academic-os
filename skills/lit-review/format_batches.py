@@ -1,355 +1,194 @@
 #!/usr/bin/env python3
+"""Validate the filled review batch files listed in _review_runs/dispatch_plan.json.
+
+Each batch file holds one block per source record (### D{N}-{source}-{ordinal}).
+Blocking (the worker must redo the batch):
+  * block set/order/titles differ from the RIS chunk; chunk/source changed
+  * a record without 决定 include/exclude, an include without 级别, an empty 理由
+  * include + exclude != records in the chunk
+Reminders only: 证据 not found verbatim in the abstract; title-only include
+without “仅凭标题”.
+
+Status per batch: OK | EMPTY (not filled yet) | INVALID | MISSING.
+Exit 0 only when every batch is OK. --json prints a machine-readable status map.
+No files are written.
 """
-format_batches.py — Agent 输出格式标准化（lit-review §2.2）
-
-设计原理（模板填空 + 结构分离）：
-- Agent 只输出条目级 key-value 块（照模板格式填空），不写任何 section headers
-- 本脚本从 _dispatch_plan.json 读取元数据，从 raw.md 读取条目
-- 按「级别」字段分组为 core/important/backup
-- Section headers、元数据行、表格结构全部由本脚本确定性生成
-
-支持的输入格式（唯一）：
-    ### 入选1
-    - 级别: 核心
-    - 作者: Author Name
-    - 标题: Paper Title
-    - 年份: 2024
-    - 期刊: Journal Name
-    - 理由: 入选理由
-
-用法:
-    python3 format_batches.py \
-        --batch-dir structure/2_literature/_batch/ \
-        --plan-json structure/2_literature/_dispatch_plan.json
-
-输出:
-    1. 标准化的 d*_batch*.md 文件
-    2. stdout 结构化摘要 + VERIFY: PASS|FAIL
-"""
+from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 
-# ---------------------------------------------------------------------------
-# 级别映射
-# ---------------------------------------------------------------------------
-
-TIER_MAP = {
-    "核心": "core", "core": "core",
-    "重要": "important", "important": "important",
-    "备选": "backup", "backup": "backup",
-    "peripheral": "backup", "alternative": "backup",
-}
-
-FIELD_MAP = {
-    "级别": "tier", "tier": "tier",
-    "作者": "author", "author": "author", "authors": "author",
-    "标题": "title", "title": "title",
-    "年份": "year", "year": "year",
-    "期刊": "journal", "journal": "journal",
-    "理由": "reason", "reason": "reason",
-}
-
-# 允许但忽略的字段
-SKIP_FIELDS = {"doi", "doi:", "链接", "link", "url"}
+def _shared() -> None:
+    for base in Path(__file__).resolve().parents:
+        for cand in (base / "shared", base / "_academic-shared" / "scripts"):
+            if (cand / "lit_common.py").is_file():
+                sys.path.insert(0, str(cand))
+                return
+    raise SystemExit("ERROR: lit_common.py not found (shared scripts directory)")
 
 
-def extract_year(s: str) -> str:
-    """Extract 4-digit year from string."""
-    m = re.search(r"((?:19|20)\d{2})", s)
-    return m.group(1) if m else ""
+_shared()
+import lit_common as lc  # noqa: E402
+import dispatch_plan as dp  # noqa: E402
+
+DECISIONS = {"include": "include", "入选": "include", "exclude": "exclude", "淘汰": "exclude"}
+TIER_MAP = {"核心": "core", "core": "core", "重要": "important", "important": "important",
+            "备选": "backup", "backup": "backup"}
+EMPTY_TIER = {"", "-", "—", "无", "淘汰", "excluded", "exclude"}
+NO_SUSPECT = {"", "-", "—", "无", "否", "no", "none"}
 
 
-# ---------------------------------------------------------------------------
-# 解析条目（唯一入口）
-# ---------------------------------------------------------------------------
+def load_review_plan(lit_dir: Path) -> dict:
+    path = lit_dir / dp.REVIEW_DIR / "dispatch_plan.json"
+    if not path.exists():
+        raise ValueError(f"DISPATCH_PLAN_MISSING: {path} (run dispatch_plan.py --mode ris first)")
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    if plan.get("mode") != "ris":
+        raise ValueError(f"DISPATCH_PLAN_WRONG_MODE: {path} is {plan.get('mode')!r}, expected 'ris'")
+    return plan
 
-def parse_entries(text: str) -> list[dict]:
-    """解析 raw.md 中的所有入选条目。
 
-    只认 ### 入选N 开头的块 + 6 行 key-value。
-    支持字段名中英文、有无 bold **标记**。
-    """
-    entries = []
-    current = None
+def validate_batch(lit_dir: Path, b: dict) -> dict:
+    """Return {status, errors, warnings, included:[paper dicts]}."""
+    run = lit_dir / dp.REVIEW_DIR
+    res = {"batch_id": b["batch_id"], "status": "OK", "errors": [], "warnings": [], "included": []}
 
-    for line in text.split("\n"):
-        stripped = line.strip()
+    def fail(msg: str, status: str = "INVALID") -> dict:
+        res["status"] = status
+        res["errors"].append(msg)
+        return res
 
-        # 新条目开始：### 入选N 或 ### paperN 或 ### N 或 ### Author Year
-        if re.match(r"^###\s+", stripped):
-            if current:
-                entries.append(current)
-            current = {}
+    path, chunk = run / b["batch_file"], run / b["chunk_file"]
+    if not path.exists():
+        return fail(f"batch file missing: {path.name}", "MISSING")
+    if not chunk.exists():
+        return fail(f"chunk missing: {b['chunk_file']} (rerun dispatch)")
+    text = path.read_text(encoding="utf-8")
+    meta = {k: b[k] for k in ("batch_id", "direction", "source_type", "source_file", "chunk_file",
+                              "item_start", "item_end", "item_count")}
+    if dp.read_meta(text, dp.BATCH_PREFIX) != meta:
+        return fail("first-line lit-batch metadata missing or edited")
+    records = lc.split_ris_records(lc.read_text(chunk))
+    if len(records) != b["item_count"]:
+        return fail(f"chunk has {len(records)} records, plan says {b['item_count']}")
+    source = lit_dir / b["source_file"]
+    if not source.exists():
+        return fail(f"SOURCE_CHANGED: {b['source_file']} missing (rerun dispatch)")
+    src_records = lc.split_ris_records(lc.read_text(source))
+    window = src_records[b["item_start"] - 1:b["item_end"]]
+    if [lc.norm_text(dp.record_title(r)) for r in window] != [lc.norm_text(dp.record_title(r)) for r in records]:
+        return fail(f"SOURCE_CHANGED: {b['source_file']} records {b['item_start']}-{b['item_end']} differ from chunk (rerun dispatch)")
+
+    blocks = dp.parse_review_batch(text)
+    expected_ids = [f"D{b['direction']}-{b['source_type']}-{b['item_start'] + i}" for i in range(len(records))]
+    got_ids = [blk["record_id"] for blk in blocks]
+    if got_ids != expected_ids:
+        missing = sorted(set(expected_ids) - set(got_ids))
+        extra = sorted(set(got_ids) - set(expected_ids))
+        return fail(f"record blocks differ from chunk: missing={missing[:5]} extra={extra[:5]} "
+                    f"(count {len(got_ids)}/{len(expected_ids)}, order must follow the chunk)")
+    if all(not blk.get("决定", "").strip() for blk in blocks):
+        return fail("not filled yet", "EMPTY")
+
+    n_inc = n_exc = 0
+    for blk, rec in zip(blocks, records):
+        rid = blk["record_id"]
+        title = dp.record_title(rec)
+        if lc.norm_text(blk.get("标题", "")) != lc.norm_text(title):
+            res["errors"].append(f"{rid}: 标题 was edited")
             continue
-
-        # 跳过非条目区域
-        if current is None:
+        decision = DECISIONS.get(blk.get("决定", "").strip().lower())
+        tier_raw = blk.get("级别", "").strip()
+        reason = blk.get("理由", "").strip()
+        evidence = blk.get("证据", "").strip()
+        if decision is None:
+            res["errors"].append(f"{rid}: 决定 must be include/exclude, got {blk.get('决定', '')!r}")
             continue
-
-        # 清除 bold 标记
-        clean = re.sub(r"\*\*", "", stripped)
-
-        # 解析 key-value: - key: value
-        kv = re.match(r"^[-*]?\s*(\S+?)\s*[：:]\s*(.+)$", clean)
-        if not kv:
+        if not reason:
+            res["errors"].append(f"{rid}: 理由 is empty")
+        abstract = dp.ris_field(rec, "AB")
+        if decision == "exclude":
+            n_exc += 1
+            if tier_raw.lower() not in EMPTY_TIER:
+                res["errors"].append(f"{rid}: exclude with 级别 {tier_raw!r}")
             continue
-
-        raw_key = kv.group(1).strip().lower()
-        raw_val = kv.group(2).strip()
-
-        # 跳过无关字段
-        if raw_key in SKIP_FIELDS:
+        n_inc += 1
+        tier = TIER_MAP.get(tier_raw.lower())
+        if tier is None:
+            res["errors"].append(f"{rid}: include needs 级别 核心/重要/备选, got {tier_raw!r}")
             continue
-
-        std_key = FIELD_MAP.get(raw_key)
-        if std_key:
-            current[std_key] = raw_val
-
-    # 最后一个条目
-    if current:
-        entries.append(current)
-
-    return entries
-
-
-# ---------------------------------------------------------------------------
-# 分组 + 生成标准输出
-# ---------------------------------------------------------------------------
-
-def group_by_tier(entries: list[dict]) -> dict[str, list[dict]]:
-    """按级别字段分组。"""
-    groups = {"core": [], "important": [], "backup": []}
-    for e in entries:
-        tier_raw = e.get("tier", "备选").strip().lower()
-        tier = TIER_MAP.get(tier_raw, "backup")
-        groups[tier].append(e)
-    return groups
-
-
-def generate_standard_batch(meta: dict, groups: dict[str, list[dict]],
-                            total_items: int) -> str:
-    """生成标准 markdown batch 文件（所有结构由 Python 确定性生成）。"""
-    d = meta.get("direction", "0")
-    batch_id = meta.get("batch_id", "")
-    direction_name = meta.get("direction_name", f"方向{d}")
-
-    total_selected = sum(len(v) for v in groups.values())
-    total_rejected = max(0, total_items - total_selected)
-
-    lines = []
-    lines.append(f"# 方向{d} Batch{meta.get('batch_num', '1')} 筛选结果\n")
-    lines.append(f"> direction: {d}")
-    lines.append(f"> direction_name: {direction_name}")
-    lines.append(f"> batch_id: {batch_id}")
-    lines.append(f"> total_items: {total_items}")
-    source_type = meta.get("source_type", "")
-    if source_type:
-        lines.append(f"> source_type: {source_type}")
-    lines.append("")
-
-    for tier_label, tier_key in [("核心文献（Core）", "core"),
-                                   ("重要文献（Important）", "important"),
-                                   ("备选文献（Backup）", "backup")]:
-        lines.append(f"## {tier_label}\n")
-        lines.append("| # | 第一作者 | 标题 | 年份 | 期刊 | 入选理由 |")
-        lines.append("|:--|:---------|:-----|:----:|:-----|:---------|")
-        for i, p in enumerate(groups[tier_key], 1):
-            author = p.get("author", "Unknown").replace("|", "/")
-            title = p.get("title", "").replace("|", "/")
-            year = extract_year(str(p.get("year", ""))) or "0000"
-            journal = p.get("journal", "Unknown").replace("|", "/")
-            reason = p.get("reason", "").replace("|", "/").replace("\n", " ")
-            lines.append(f"| {i} | {author} | {title} | {year} | {journal} | {reason} |")
-        lines.append("")
-
-    lines.append("## 淘汰文献摘要\n")
-    lines.append(f"淘汰{total_rejected}篇。")
-
-    return "\n".join(lines) + "\n"
+        if abstract:
+            if not evidence or lc.norm_text(evidence) not in lc.norm_text(abstract):
+                res["warnings"].append(f"{rid}: 证据 not found verbatim in abstract")
+        elif "仅凭标题" not in reason + evidence:
+            res["warnings"].append(f"{rid}: no abstract; reason should say 仅凭标题")
+        suspect = blk.get("疑似竞品", "").strip()
+        authors = dp.ris_values(rec, "AU") or dp.ris_values(rec, "A1")
+        res["included"].append({
+            "record_id": rid, "direction": b["direction"], "source_type": b["source_type"],
+            "source_file": b["source_file"], "tier": tier, "reason": reason,
+            "author": lc.surname(authors[0]) if authors else "",
+            "title": title,
+            "year": (dp.ris_field(rec, "PY") or dp.ris_field(rec, "Y1") or dp.ris_field(rec, "DA"))[:4],
+            "journal": dp.ris_field(rec, "T2") or dp.ris_field(rec, "JF") or dp.ris_field(rec, "JO") or dp.ris_field(rec, "T3"),
+            "doi": lc.normalize_doi(dp.ris_field(rec, "DO")),
+            "database_id": dp.ris_field(rec, "UT"),
+            "suspect": "" if suspect.lower() in NO_SUSPECT else suspect,
+        })
+    if not res["errors"] and n_inc + n_exc != b["item_count"]:
+        res["errors"].append(f"include({n_inc}) + exclude({n_exc}) != records({b['item_count']})")
+    if res["errors"]:
+        res["status"] = "INVALID"
+        res["included"] = []
+    return res
 
 
-# ---------------------------------------------------------------------------
-# 从 dispatch plan JSON 读取元数据
-# ---------------------------------------------------------------------------
+def validate_all(lit_dir: Path) -> tuple[dict, list[dict]]:
+    plan = load_review_plan(lit_dir)
+    skipped = lc.skipped_directions(lit_dir, ("review",))
+    if skipped & set(plan["directions"]):  # skipped after dispatch: leave those batches out
+        plan["directions"] = [d for d in plan["directions"] if d not in skipped]
+        plan["batches"] = [b for b in plan["batches"] if b["direction"] not in skipped]
+        plan["sources"] = [s for s in plan["sources"] if s["direction"] not in skipped]
+    return plan, [validate_batch(lit_dir, b) for b in plan["batches"]]
 
-def load_agent_metadata(plan_json_path: str) -> dict[str, dict]:
-    """从 _dispatch_plan.json 读取每个 agent 的元数据。
 
-    返回 {batch_id: {direction, batch_num, direction_name, total_items, ...}}
-    """
-    meta_map = {}
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--lit-dir", required=True, help="structure/2_literature")
+    ap.add_argument("--json", action="store_true", help="print {batch_id: {status, errors}} only")
+    args = ap.parse_args()
     try:
-        with open(plan_json_path, encoding="utf-8") as f:
-            plan = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return meta_map
-
-    # 从 items_summary 构建 direction_name 映射（如有）
-    dir_names = {}
-    for item in plan.get("items_summary", []):
-        d = item.get("direction")
-        # 尝试从 source_file 提取方向名
-        if d and "source_file" in item:
-            name = re.sub(r"^\d+[-_]", "", item["source_file"])
-            name = re.sub(r"\.(ris|md)$", "", name)
-            name = re.sub(r"_cnki$", "", name)  # strip CNKI suffix
-            name = re.sub(r"WOS_\d+_\d+$", "", name).strip("_").strip()
-            if name and d not in dir_names:  # keep first (WoS) name, don't overwrite
-                dir_names[d] = name
-
-    for agent in plan.get("agents", []):
-        d = agent.get("direction", 0)
-        # Bug 1 fix: prefer batch_seq (unique across source files), fallback to split_info
-        batch_num = agent.get("batch_seq")
-        if batch_num is None:
-            split = agent.get("split_info", "1/1")
-            batch_num = split.split("/")[0] if "/" in split else "1"
-        batch_id = f"d{d}_batch{batch_num}"
-
-        meta_map[batch_id] = {
-            "direction": str(d),
-            "batch_num": str(batch_num),
-            "batch_id": batch_id,
-            "direction_name": dir_names.get(d, f"方向{d}"),
-            "total_items": agent.get("item_count", 30),
-            "source_type": agent.get("source_type", ""),  # Bug 4: propagate source_type
-        }
-
-    return meta_map
-
-
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="Normalize batch files to standard format")
-    parser.add_argument("--batch-dir", required=True, help="Directory containing batch files")
-    parser.add_argument("--plan-json", default=None,
-                        help="Path to _dispatch_plan.json (for metadata)")
-    args = parser.parse_args()
-
-    batch_dir = Path(args.batch_dir)
-
-    # 加载元数据
-    plan_json = args.plan_json
-    if not plan_json:
-        # 自动查找
-        candidate = batch_dir.parent / "_dispatch_plan.json"
-        if candidate.exists():
-            plan_json = str(candidate)
-    meta_map = load_agent_metadata(plan_json) if plan_json else {}
-
-    # 查找 raw 文件
-    raw_files = sorted(batch_dir.glob("d*_batch*_raw.md"))
-    if not raw_files:
-        print("ERROR: No batch files found", file=sys.stderr)
-        sys.exit(1)
-
-    total_ok = 0
-    total_warn = 0
-    total_papers = 0
-    errors = []
-
-    for fp in raw_files:
-        try:
-            text = fp.read_text(encoding="utf-8")
-            stem = fp.stem.replace("_raw", "")
-
-            # 获取元数据（优先从 JSON，回退从文件名推断）
-            meta = meta_map.get(stem, {})
-            if not meta:
-                fname_m = re.match(r"d(\d+)_batch(\d+)", stem)
-                if fname_m:
-                    meta = {
-                        "direction": fname_m.group(1),
-                        "batch_num": fname_m.group(2),
-                        "batch_id": stem,
-                        "direction_name": f"方向{fname_m.group(1)}",
-                        "total_items": 30,
-                    }
-
-            # 检查是否是"无入选"
-            if text.strip() in ("无", "无入选文献", ""):
-                entries = []
-            else:
-                entries = parse_entries(text)
-
-            # Bug 5: validate entries — drop nearly-empty ones, warn about partial ones
-            valid_entries = []
-            for idx, e in enumerate(entries):
-                missing = [f for f in ("title", "author", "year", "tier") if not e.get(f)]
-                if len(missing) >= 3:
-                    print(f"  ⚠ {stem}: entry {idx+1} dropped (missing {', '.join(missing)})", file=sys.stderr)
-                else:
-                    if missing:
-                        print(f"  ⚠ {stem}: entry {idx+1} incomplete (missing {', '.join(missing)}): "
-                              f"title={e.get('title', '?')[:40]}", file=sys.stderr)
-                    valid_entries.append(e)
-            entries = valid_entries
-
-            # 分组
-            groups = group_by_tier(entries)
-            paper_count = sum(len(v) for v in groups.values())
-            total_papers += paper_count
-
-            # 校验
-            file_errors = []
-            placeholder_authors = {"unknown", "unk", "n/a", "na", "tbd", "anon", "anonymous", ""}
-            for tier, tier_entries in groups.items():
-                for i, p in enumerate(tier_entries):
-                    if not p.get("title"):
-                        file_errors.append(f"{tier}[{i}]: missing title")
-                    if not extract_year(str(p.get("year", ""))):
-                        file_errors.append(f"{tier}[{i}]: missing/invalid year")
-                    if not p.get("tier"):
-                        file_errors.append(f"{tier}[{i}]: missing 级别 field")
-                    # Placeholder-author guard: catches subagents that wrote "Unknown"
-                    # instead of parsing RIS AU field (yields unknown{year}x citation keys downstream)
-                    author = str(p.get("author", "")).strip().lower()
-                    if author in placeholder_authors:
-                        title_preview = str(p.get("title", "?"))[:50]
-                        print(f"  ⚠ {stem}: placeholder author '{p.get('author')}' at {tier}[{i}] — "
-                              f"agent likely skipped AU field: {title_preview}", file=sys.stderr)
-
-            # 生成标准输出
-            total_items = meta.get("total_items", 30)
-            output = generate_standard_batch(meta, groups, total_items)
-            out_path = batch_dir / f"{stem}.md"
-            out_path.write_text(output, encoding="utf-8")
-
-            if file_errors:
-                total_warn += 1
-                errors.append(f"{stem}: {paper_count} papers, {len(file_errors)} errors: {file_errors[:3]}")
-                print(f"  ⚠ {stem}: {paper_count} papers ({', '.join(file_errors[:2])})")
-            else:
-                total_ok += 1
-                print(f"  ✓ {stem}: {paper_count} papers")
-
-        except Exception as e:
-            total_warn += 1
-            errors.append(f"{fp.name}: {e}")
-            print(f"  ✗ {fp.name}: {e}", file=sys.stderr)
-
-    print(f"\nTotal: {len(raw_files)} files, {total_papers} papers")
-    print(f"OK: {total_ok}, Warnings: {total_warn}")
-
-    if errors:
-        print("\n=== VERIFY: FAIL ===")
-        for e in errors:
+        plan, results = validate_all(Path(args.lit_dir))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        print("=== VERIFY: FAIL ===")
+        raise SystemExit(1)
+    ok = all(r["status"] == "OK" for r in results)
+    if args.json:
+        print(json.dumps({r["batch_id"]: {"status": r["status"], "errors": r["errors"][:10]} for r in results},
+                         ensure_ascii=False, indent=2))
+        raise SystemExit(0 if ok else 1)
+    print("=== REVIEW BATCH CHECK ===")
+    for r in results:
+        line = f"{r['batch_id']}: {r['status']}"
+        if r["status"] == "OK":
+            line += f" (入选 {len(r['included'])})"
+        print(line)
+        for e in r["errors"][:10]:
             print(f"  ❌ {e}")
-        if total_ok == 0:
-            sys.exit(1)
-        else:
-            # Partial failures: some files OK but some failed — still non-zero exit
-            sys.exit(1)
-    else:
-        print("\n=== VERIFY: PASS ===")
+        for w in r["warnings"][:10]:
+            print(f"  ⚠️ {w}")
+    bad = [r["batch_id"] for r in results if r["status"] != "OK"]
+    print(f"OK {len(results) - len(bad)}/{len(results)}")
+    if bad:
+        print("Redo batches: " + ", ".join(bad))
+        print("=== VERIFY: FAIL ===")
+        raise SystemExit(1)
+    print("=== VERIFY: PASS ===")
 
 
 if __name__ == "__main__":

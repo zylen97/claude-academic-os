@@ -1,6 +1,6 @@
 # Claude Academic OS
 
-A personal academic operating system built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — 39 skills, 8 specialized agents, and an 80-journal daily literature radar covering the full research lifecycle from intelligence gathering to knowledge writing and dissemination.
+A personal academic operating system built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — 38 academic workflow skills, 1 independent KB utility, and 10 specialized agents (the 80-journal daily literature radar now runs on the Codex side) covering the full research lifecycle from intelligence gathering to knowledge writing and dissemination.
 
 ## System Architecture
 
@@ -10,85 +10,73 @@ A personal academic operating system built on [Claude Code](https://docs.anthrop
 
 ## Layer 3: Literature Radar
 
-An automated intelligence-gathering system that scans 80 journals daily. Scanner code lives in [`idea-scout/pipeline`](https://github.com/zylen97/idea-scout).
-
-| Scanner | Journals | Schedule | Source | Recipients |
-|:--------|:---------|:---------|:-------|:-----------|
-| **FT50 Scout** | 25 FT50/UTD24 | Daily 9:00 | OpenAlex + LLM translation | 3 |
-| **CE/PM Scout** | 12 CE/PM | Daily 9:10 | OpenAlex + LLM translation | 4 |
-| **CNKI Scout** | 43 Chinese core | Daily 9:20 | CNKI RSS | 1 |
-
-**Flow**: launchd triggers [`idea-scout`](https://github.com/zylen97/idea-scout) pipelines → OpenAlex/RSS fetch → LLM translates abstracts → email digest → [Idea Scout App](https://zylen97.github.io/idea-scout/) displays → user selects → `/idea-mine` analyzes
+The daily radar (FT50/UTD24, CE/PM, CNKI digests) is owned by the **Codex** side ([`idea-scout`](https://github.com/zylen97/idea-scout) pipelines + launchd `com.idea-scout.*`). Claude no longer ships an `idea-scout` skill; selected papers enter Claude through `/idea-mine`.
 
 | Skill | Description |
 |:------|:------------|
-| `/idea-scout` | Manage FT50/UTD24 scanning configuration, trigger manual scans, sync App data |
 | `/figure-harvest` | Batch harvest figures from Elsevier journals for style reference library |
 
 ## Layer 4: Production Pipelines
 
-### English Paper Pipeline (14 skills)
+### English Paper Pipeline (Academic OS Lite)
 
-The core pipeline, from idea to revision response. Each skill is invoked via slash command in Claude Code.
+Single specification shared verbatim with the Codex side: [`skills/shared/ACADEMIC-OS-LITE.md`](skills/shared/ACADEMIC-OS-LITE.md).
+Principle: **keep Codex's skeleton, drop its machinery** — no YAML contracts, no hash chains, no contract validators; git is the version trail, every artifact is human-readable, and only real research risks block.
 
 <p align="center">
-  <img src="assets/skills_pipeline.svg" alt="English Paper Pipeline" width="100%">
+  <img src="assets/skills_pipeline.svg" alt="English paper pipeline" width="100%">
 </p>
+
+**Project stage** lives only in the project `CLAUDE.md` and is written by exactly one skill per transition:
+`foundation` (`/paper-init`; `/idea-refine` rolls back on design changes) → `analysis` (`/analysis` Plan approved) → `drafting` (`/analysis` Release confirmed) → `submitted` (`/pre-submit`) → `revision-R{N}` (`/rev-init`).
 
 **Phase 1: Idea & Init**
 
 | Skill | Description |
 |:------|:------------|
 | `/idea-mine` | Deep-dive selected PDFs to extract transferable research ideas → `idea.md` |
-| `/paper-init` | Initialize project skeleton: 6 publisher templates + Git/GitHub + 3-layer document system |
+| `/paper-init` | Project skeleton: publisher template + method profile (saom / panel-regression / survey-sem / analytical-model / other); `analysis_plan.md` draft; no technical chapter markdown |
 
 **Phase 2: Literature** (shared with Dissertation & Funding pipelines)
 
 | Skill | Description |
 |:------|:------------|
-| `/lit-plan` | Plan search directions, generate Web of Science / CNKI queries with quota allocation |
-| `/lit-review` | Screen RIS exports (WoS + CNKI dual-track), generate per-direction and summary reports |
-| `/lit-tag` | Tag screened papers by function (BG/LR/GAP/...), classify by research question |
-| `/lit-pool` | Aggregate into citation pool with usage scenarios, tier ranking + `master.bib`, Zotero sync |
+| `/lit-plan` | Search directions, WoS queries validated by live hit counts + sampled precision, quotas; exports `direction{N}_wos.ris` |
+| `/lit-workflow` | Single entry: input normalization (incl. CNKI `.enw → .ris`) → [screen] → review → tag → pool; resumable `from`/`through`; maintains `lit_status.md` |
+| `/lit-screen` · `/lit-review` · `/lit-tag` · `/lit-pool` | Stage implementations / targeted repair entries (sonnet workers for review and tag; pool produces `citation_pool/`, `master.bib`, `literature_manifest.json`) |
+| `/build-intro-lit-table` | Introduction literature-landscape table and one defensible general gap |
 
-**Phase 3: Writing** (dual-track: Technical + Narrative)
-
-| Skill | Description |
-|:------|:------------|
-| `/method-audit` | Benchmark against published papers, audit methodology issues, fix and rewrite |
-| `/method-end` | Distill mature `_dev.md` into publication-ready chapter markdown |
-| `/pen-outline` | Interactively build sentence-level outlines (arguments + citation forms) |
-| `/pen-draft` | Generate first draft from outline via journal-scout + parallel sci-writer agents |
-| `/pen-polish` | Iterative polish: strict-reviewer → user confirm → revise → language-polisher |
-
-**Phase 4: Finalize**
+**Phase 3: Design & Analysis**
 
 | Skill | Description |
 |:------|:------------|
-| `/finalize` | Conclusion → Abstract → Cover Letter → Structure cleanup (remove scaffolding) |
-| `/pre-submit` | Pre-submission checklist: citation integrity, self-citation rate, formatting, symbol consistency |
+| `/idea-refine` | idea-reviewer (Dim5 modeling novelty, Dim6 assumption audit) + 5–8 design benchmarks + profile-aware feasibility; design-level changes are logged as `【设计层】` entries |
+| `/analysis` | Plan (user approves `analysis_plan.md`) → Run (derivations in `3_analysis/derivation/` or scripts in `data/`) → Release (user confirms `results_register.md`, IDs F1, F2, …); one-page method profiles |
 
-**Phase 5: Revision**
-
-| Skill | Description |
-|:------|:------------|
-| `/rev-init` | Freeze baseline → parse decision letter → cluster comments → scaffold response letter |
-| `/rev-respond` | Per-comment response loop: strategy alignment → draft → polish → execute |
-
-**Cross-cutting**
+**Phase 4: Writing**
 
 | Skill | Description |
 |:------|:------------|
-| `/idea-refine` | Interactive idea & method design iteration with idea-reviewer agent (phase-aware: reviews idea.md, `_dev.md`, or manuscript.tex depending on project stage) |
-| `/figure` | Academic figure workflow: auto-select TikZ/Python/R, create or beautify, Eagle style reference, cross-figure consistency check |
-| `/latex-table` | LaTeX table formatting & templates (Elsarticle compatible) |
+| `/technical` | Map (user confirms `technical_map.md` + `## 技术章节` table) → write `manuscript.tex` → audit against the register → embedded polish → compile |
+| `/narrative` | Introduction / Literature Review via confirmed blueprint md; Discussion after technical, located by section role (not literal titles) |
+| `/polish` | Language-only polish; also callable in embedded mode by technical / narrative |
+| `/figure` · `/latex-table` | Figures and tables; data only from sources registered in `results_register.md` |
+
+**Phase 5: Finalize & Revision**
+
+| Skill | Description |
+|:------|:------------|
+| `/finalize` | Conclusion → Abstract → Cover Letter (manuscript is the only factual source; submission metadata confirmed) → archive scaffolding |
+| `/pre-submit` | Citations resolve, figures/tables registered and cited, terminology, manuscript economy, date-based staleness check |
+| `/rev-init` | Freeze baseline → parse decision letter (E/AE/R) → cluster → scaffold response letter |
+| `/rev-respond` | Two confirmations (strategy, final synthesis); analysis-type comments route to `/analysis` → `/technical` repair without changing the stage |
 
 ### Dissertation Pipeline (5 skills)
 
 For supervising graduate theses — rewrite and expand published English papers into Chinese dissertations (not translation).
 
 ```
-/diss-init → /diss-outline → /diss-draft → /diss-polish → /diss-finalize
+/diss-init → /lit-plan → /lit-workflow → /diss-outline → /diss-draft → /diss-polish → /diss-finalize
 ```
 
 | Skill | Description |
@@ -104,7 +92,7 @@ For supervising graduate theses — rewrite and expand published English papers 
 For research grant proposals — synthesize 2-3 existing projects into a persuasive application.
 
 ```
-/fund-mine → /fund-init → /fund-outline → /fund-draft → /fund-review → /fund-polish
+/fund-mine → /fund-init → /lit-plan → /lit-workflow (through=review) → /fund-outline → /fund-draft → /fund-review → /fund-polish
 ```
 
 | Skill | Description |
@@ -118,18 +106,20 @@ For research grant proposals — synthesize 2-3 existing projects into a persuas
 
 ## Layer 5: Quality Assurance
 
-Eight specialized agents that skills dispatch as sub-agents. They are not invoked directly — skills orchestrate them.
+Ten specialized agents that skills dispatch as sub-agents. They are not invoked directly — skills orchestrate them.
 
 | Agent | Role | Used by |
 |:------|:-----|:--------|
-| `sci-writer` | Academic English writer, journal-aware | `/pen-draft` |
+| `sci-writer` | Faithful technical-section writer | `/technical` |
 | `sci-writer-zh` | Chinese academic writer (not translator) | `/diss-draft`, `/fund-draft` |
-| `strict-reviewer` | Harsh peer reviewer simulation | `/pen-polish` |
 | `idea-reviewer` | Idea & method design auditor | `/idea-refine` |
-| `language-polisher` | English prose polish (grammar, flow, Chinglish patterns) | `/pen-polish`, `/finalize` |
-| `language-auditor` | Systematic 18-item category audit (3 groups, parallel, read-only) | `/pen-polish`, `/finalize`, `/rev-respond` |
+| `language-polisher` | English prose polish (grammar, flow, Chinglish patterns) | `/polish`, `/finalize`, `/rev-respond`, `/diss-finalize` |
+| `language-auditor` | Systematic language audit (3 groups, parallel, read-only) | `/polish`, `/finalize`, `/rev-respond` |
 | `language-polisher-zh` | Chinese prose polish (register, terminology, coherence) | `/diss-polish`, `/fund-polish` |
-| `journal-scout` | Fetch target journal guidelines & conventions | `/pen-draft`, `/pen-polish` |
+| `journal-scout` | Fetch target journal guidelines & conventions | Workflows that explicitly require a Writing Brief |
+| `lit-review-worker` | Per-chunk screening decisions (sonnet, writes only its batch file) | `/lit-review` |
+| `lit-tag-worker` | Per-batch functional tags (sonnet, writes only its template) | `/lit-tag` |
+| `lit-pool-worker` | Citation-scenario writing for the pool (main model) | `/lit-pool` |
 
 ## Layer 6: Knowledge Writing & Dissemination
 
@@ -183,40 +173,40 @@ Claude Code auto-discovers all skills from `~/.claude/skills/` and agents from `
 ├── CLAUDE.md                 # Personal instructions (gitignored)
 ├── settings.json             # Claude Code settings (gitignored)
 ├── memory/                   # Persistent memory system (gitignored)
-├── agents/                   # 8 specialized sub-agents
+├── agents/                   # 10 specialized sub-agents (incl. 3 lit workers)
 │   ├── sci-writer.md         # English academic writer
 │   ├── sci-writer-zh.md      # Chinese academic writer
-│   ├── strict-reviewer.md    # Peer reviewer
 │   ├── idea-reviewer.md      # Idea & method auditor
 │   ├── language-polisher.md  # English polisher (editing)
 │   ├── language-auditor.md   # English auditor (systematic checklist, read-only)
 │   ├── language-polisher-zh.md # Chinese polisher
 │   └── journal-scout.md      # Journal guidelines
-├── skills/                   # 39 slash-command skills
-│   ├── idea-scout/           # Literature radar management
+├── skills/                   # 38 academic workflow skills + 1 independent KB utility
 │   ├── paper-init/           # Project scaffolding (6 publishers, 4 method types)
-│   ├── lit-*/                # Literature pipeline (4 skills)
-│   ├── pen-*/                # Writing pipeline (3 skills)
+│   ├── lit-*/                # Literature pipeline (plan, workflow, screen, review, tag, pool)
+│   ├── analysis/             # Plan / Run / Release + method profiles + templates
+│   ├── technical/            # Map + LaTeX writing of technical sections
+│   ├── narrative/            # Introduction/LR/Discussion pipeline
 │   ├── rev-*/                # Revision pipeline (2 skills)
 │   ├── diss-*/               # Dissertation pipeline (5 skills)
 │   ├── fund-*/               # Funding pipeline (6 skills)
 │   ├── daily-write/          # Daily writing workflow (9 phases: source→draft→deploy→wechat)
 │   ├── wechat-publish/       # Standalone post-only entry: existing slug → WeChat draft
 │   ├── kb/                   # Personal knowledge base (ingest/lint/model)
-│   └── shared/               # Shared utilities (Python)
+│   └── shared/               # ACADEMIC-OS-LITE.md spec, MANUSCRIPT-ECONOMY.md, lit_common.py, dispatch_plan.py
 # scheduled/ → github.com/zylen97/idea-scout/pipeline
 └── config/                   # Runtime state
 ```
 
 ## Design Principles
 
-- **Markdown first** — All content goes into chapter `.md` files; only written to `manuscript.tex` after explicit user confirmation
-- **No skipping, free backtracking** — Pipeline phases proceed in order, but revisions to earlier stages are always allowed
-- **Interactive confirmation** — Every skill pauses at critical decision points; no silent overwrites
-- **Parallel agents** — Computation-heavy steps dispatch parallel sub-agents (literature screening across directions, multi-section drafting)
-- **Dual-track writing** — Technical chapters via `/method-end` → `/pen-draft`; Narrative chapters via `/pen-outline` → `/pen-draft` — both tracks converge at the same drafting skill
-- **Pipeline reuse** — Literature pipeline (`/lit-*`) is shared across English papers, dissertations, and funding applications
-- **Phase-aware intelligence** — Skills like `/idea-refine` automatically detect project stage and review the appropriate artifact (idea.md → `_dev.md` → manuscript.tex)
+- **One spec, two platforms** — `skills/shared/ACADEMIC-OS-LITE.md` is identical on the Claude and Codex sides; skills differ only in invocation syntax
+- **Skeleton, not machinery** — no YAML contracts, hash chains, or validators; staleness is judged by three dates (plan change log, register release, technical completion)
+- **Design before results** — the analysis plan is approved before execution; design-level changes are logged and re-approved
+- **Single source of text** — no technical chapter drafts; `manuscript.tex` is the only manuscript text, derivations stay in `3_analysis/derivation/`
+- **Block only real research risks** — naming or timing inconsistencies warn; missing evidence, unlogged design changes, unresolved citations, or broken RIS block
+- **Explicit confirmation points** — idea edits, plan approval, register release, technical map, Intro/LR blueprints, submission metadata, and any git commit/push
+- **Pipeline reuse** — the literature pipeline (`/lit-workflow`) is shared across English papers, dissertations (full), and funding applications (`through=review`)
 
 ## License
 

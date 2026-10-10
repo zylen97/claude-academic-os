@@ -21,7 +21,8 @@ MORANDI_PALETTE = {
     "gold_light": "#fadcb4",
     "rose": "#b57979",
     "rose_light": "#dea3a2",
-    "gray": "#9f9f9f",
+    "gray_deep": "#7c7c7c",
+    "gray_mid": "#b5b5b5",
     "gray_light": "#cfcece",
 }
 MORANDI_HEX_SET = {v.lower() for v in MORANDI_PALETTE.values()}
@@ -269,7 +270,7 @@ def cmd_inventory(args):
     audit_path = os.path.join(fdir, "_figure_audit.json")
     with open(audit_path, "w", encoding="utf-8") as f:
         json.dump(
-            {"figures": results, "issues": all_issues, "total": len(results)},
+            {"figures": results, "issues": all_issues, "errors": errors, "total": len(results)},
             f,
             ensure_ascii=False,
             indent=2,
@@ -288,8 +289,14 @@ def cmd_inventory(args):
 
     print(f"\nAudit JSON: {audit_path}")
 
-    if all_issues:
-        print(f"\n=== VERIFY: FAIL ({len(all_issues)} issues) ===")
+    if all_issues or errors:
+        detail = []
+        if all_issues:
+            detail.append(f"{len(all_issues)} issues")
+        if errors:
+            detail.append(f"{len(errors)} parse errors")
+        print(f"\n=== VERIFY: FAIL ({', '.join(detail)}) ===")
+        sys.exit(1)
     else:
         print("\n=== VERIFY: PASS ===")
 

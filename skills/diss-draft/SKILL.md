@@ -306,9 +306,7 @@ END FOR
 4. 删除骨架注释行（`% 目标字数：` `% 内容来源：` `% Guidelines:` `% 写作要点：` `% 详细大纲见`）——diss-outline Step 2.2 追加的五类注释全部在此清理
 5. 写入文件
 6. Git Checkpoint：
-   ```bash
-   git add chapters/ch{N}.tex && git commit -m "diss-draft: write §{X.Y.Z} {subsection_title}"
-   ```
+   > Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-draft: write §{X.Y.Z} {subsection_title}`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### Step 2：本章小结
 
@@ -362,12 +360,9 @@ END FOR
 - [ ] ...
 ```
 
-### Git Checkpoint + Push（里程碑：第 N 章初稿完成）
+### Git Checkpoint（里程碑：第 N 章初稿完成）
 
-```bash
-git add -A && git commit -m "diss-draft: ch{N} complete ({actual}字)"
-git push
-```
+> Checkpoint 卡：列出本步精确文件（建议提交信息 `diss-draft: ch{N} complete ({actual}字)`），经 AskUserQuestion 单独确认后再执行 focused staging/commit；默认不 push（规格 §5）。
 
 ### Step 5：完成提示
 

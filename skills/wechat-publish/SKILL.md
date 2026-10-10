@@ -22,9 +22,9 @@ description: "已有 src/data/blog/{slug}.md 的独立后置入口：把博客�
 ### 凭证位置
 
 ```bash
-# Dropbox/Apps/secrets-vault/email-config.sh 中存储（通过 ~/.claude/scheduled/email-config.sh 符号链接访问）：
+# Dropbox/Apps/secrets-vault/email-config.sh 中存储（直接读取密钥库原文件）：
 # WECHAT_APPID 和 WECHAT_APPSECRET
-source ~/.claude/scheduled/email-config.sh
+source ~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh
 ```
 
 ### IP 白名单
@@ -405,7 +405,7 @@ npx gh-pages -d dist --dotfiles
 | 图片压缩后仍 >1MB | 降低 quality 到 40 重试 |
 | API 返回未知错误 | 打印完整错误信息，不静默吞掉 |
 | 已有同标题草稿 | 微信允许重复标题，但提醒用户检查是否重复推送 |
-| 凭证缺失 | 提示用户检查 `~/.claude/scheduled/email-config.sh`（→ secrets-vault 符号链接） |
+| 凭证缺失 | 提示用户检查 `~/Library/CloudStorage/Dropbox/Apps/secrets-vault/email-config.sh` |
 | 所有图片上传失败 | 询问用户是否推送无图草稿，或放弃本次推送 |
 | 博客 frontmatter 缺 title | 报错，title 为必须字段 |
 | 博客 frontmatter 缺 cover | 提醒用户补充封面图（可用 `/daily-write` 重新生成），或询问是否使用默认封面 |
