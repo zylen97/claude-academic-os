@@ -47,12 +47,12 @@ Release【确认】→ results_register.md（发布日期）→ 阶段 drafting
    - 第 5 节：逐条列 profile 第 5 节必做项，不适用的写"不适用：原因"；再列项目特有项。
    - 第 6 节：把 profile 第 7 节具体化到本项目。
 5. **确认**：在对话中展示完整计划，用 AskUserQuestion 询问：批准 / 修改后再看 / 先存为草稿。
-   - 批准：写入计划，状态行为 `状态: approved（批准日期 YYYY-MM-DD）｜profile: <name>`；项目合同缺"方法 profile"字段时补写 `- **方法 profile**: <name>`（在 `## 核心配置` 下）；按上节规则写阶段。若是重新批准，在第 7 节表格末尾追加一行 `| YYYY-MM-DD | 重新批准计划 | idea-refine 改动设计后 | 影响……（列出需重跑的任务与受影响的 register 条目） |`，并把状态行的批准日期改为当天。
+   - 批准：写入计划，状态行为 `状态: approved（批准日期 YYYY-MM-DD）｜profile: <name>`；项目合同缺"方法 profile"字段时补写 `- **方法 profile**: <name>`（在 `## 核心配置` 下）；按上节规则写阶段。若是重新批准，在第 7 节表格末尾追加一行 `| YYYY-MM-DD HH:MM | 重新批准计划 | idea-refine 改动设计后 | 影响……（列出需重跑的任务与受影响的 register 条目） |`，并把状态行的批准日期改为当天。
    - 存为草稿：写入计划，状态 `draft`，不改阶段。
 
 ## 变更流程（approved 之后）
 
-- 改第 1、3、4、5 节任何内容：先向用户展示拟追加的第 7 节表格行（`| 日期 | 改了什么 | 原因 | 影响 register/technical/narrative 的哪些部分 |`），确认后再追加并修改对应节；状态保持 `approved`。
+- 改第 1、3、4、5 节任何内容：先向用户展示拟追加的第 7 节表格行（`| YYYY-MM-DD HH:MM | 改了什么 | 原因 | 影响 register/technical/narrative 的哪些部分 |`），确认后再追加并修改对应节；状态保持 `approved`。
 - **属于设计层的变化**（RQ、模型族、主设定、数据边界、核心构念）：不在本技能内改，停止并建议运行 `/idea-refine`（由它写带【设计层】标记的变更记录；当前阶段为 analysis/drafting 时它会回退为 `foundation`，submitted/revision 时不改阶段），之后回到本技能：第 0 步按"最后一条【设计层】条目之后没有重新批准条目"识别并进入 Plan 重新批准，不会再转回 idea-refine。
 - survey-sem 数据到达：追加一行"数据入库"（格式见 `profiles/survey-sem.md` 第 1 节），展示后写入，不需重新批准计划。
 - 计划中登记过的空结果、失败检验，不能通过变更记录删除；它们必须进入 register。
@@ -88,7 +88,7 @@ Run 进度只在对话中汇报，不写进计划（计划第 4 节的改动需�
    - 每个来源文件存在、锚点存在；analytical-model 的每个命题都有复核结果；
    - 结果与计划一致：若输出显示模型或变量与计划不符且第 7 节无记录 → **阻断**，先走变更流程；来源文件缺失 → **阻断**。
 3. 展示完整 register 与自查结果，用 AskUserQuestion 询问"register 是否完整、可以发布"。
-4. 确认后写入：发布行 `发布: YYYY-MM-DD（对应 analysis_plan 批准日期 YYYY-MM-DD）`；按"第 0 步"规则写阶段（`analysis → drafting`）。
+4. 确认后写入：发布行 `发布: YYYY-MM-DD HH:MM（对应 analysis_plan 批准日期 YYYY-MM-DD）`（时刻取当前本地时间，规格 §4.6）；按"第 0 步"规则写阶段（`analysis → drafting`）。
 5. **重新发布**（补分析、审稿补分析）：沿用原有 ID，新增条目往后编号；写入前若 git 显示旧 register 有未提交改动，先复制到 `structure/0_global/_archive/results_register_{旧发布日期}.md`。若 `technical_map.md` 已有"技术正文完成"日期，提醒：register 晚于技术正文 → 需要 `/technical` 修复。
 
 ## 收尾

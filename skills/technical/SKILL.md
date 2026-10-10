@@ -30,7 +30,7 @@ Tex → 写 manuscript.tex → 对照 register 审计 → 嵌入式润色 → �
 - **日期检查（§4.6，只提醒不阻断）**：
   - 计划第 7 节最后日期 > register 发布日期 → 提醒"register 可能未反映最新变更"，建议先 `/analysis` 重新 Release；用户可选择继续。
   - 计划第 7 节最后日期或 register 发布日期 > 技术正文完成日期（为空时跳过）→ 提醒技术正文已过期，进入**修复**模式；回流路线：register 变了 → 本技能修复；设计变了 → `/idea-refine` → `/analysis` Plan。
-  - 日期比较用严格"晚于"；同一天不提醒。
+  - 按时刻严格比较（规格 §4.6）；只写了日期的旧条目与另一方同一天时不判先后，提醒用户确认。
 - **模式**（只有两种）：
   - **新写**：没有 `technical_map.md`，或用户要求整体重写 → 从 Map 开始。
   - **修复**：已有 map 且"技术正文完成"有日期 → 按下方"修复模式"。
@@ -55,7 +55,7 @@ Tex → 写 manuscript.tex → 对照 register 审计 → 嵌入式润色 → �
 **确认**：展示完整 map，用 AskUserQuestion 询问：批准结构并授权写入下列技术章节 / 修改 / 暂停。问题中列明将被替换或新建的 `\section` 标题（批准即授权本次只改这些章节及其所需的 `{ID}.bib` 条目）。
 
 批准后写入：
-1. `structure/0_global/technical_map.md`，表头 `依据: results_register 发布 YYYY-MM-DD｜技术正文完成: `（留空）。
+1. `structure/0_global/technical_map.md`，表头 `依据: results_register 发布 YYYY-MM-DD HH:MM｜技术正文完成: `（留空）。
 2. 项目 `CLAUDE.md` 的 `## 技术章节`（已有则替换该节内容；无则新建，放在 `## 项目阶段` 之后）：
    ```
    ## 技术章节
@@ -109,7 +109,7 @@ Tex → 写 manuscript.tex → 对照 register 审计 → 嵌入式润色 → �
 
 ## 写完成日期
 
-编译通过后，把 `technical_map.md` 表头改为 `依据: results_register 发布 <register 当前发布日期>｜技术正文完成: <今天>`。
+编译通过后，把 `technical_map.md` 表头改为 `依据: results_register 发布 <register 当前发布时刻>｜技术正文完成: <当前时刻 YYYY-MM-DD HH:MM>`。
 
 ## 修复模式
 

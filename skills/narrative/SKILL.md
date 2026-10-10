@@ -246,9 +246,9 @@ BLOCK 提示：
   - RQ 缺失 → 先运行 /narrative section=introduction
 ```
 
-**日期检查**（规格 §4.6，提醒不阻断）：比较 `analysis_plan.md` 第 7 节最后一条日期、`results_register.md` 发布日期与 `technical_map.md` 技术正文完成日期。前两者任一晚于完成日期 →
+**日期检查**（规格 §4.6，提醒不阻断）：按时刻（规格 §4.6）比较 `analysis_plan.md` 第 7 节最后一条变更、`results_register.md` 发布与 `technical_map.md` 技术正文完成。前两者任一晚于完成日期 →
 ```
-⚠️ 技术正文可能已过期：{变更记录 / register} 日期 {X} 晚于技术正文完成日期 {Y}
+⚠️ 技术正文可能已过期：{变更记录 / register} 时刻 {X} 晚于技术正文完成时刻 {Y}
   回流：register 变了 → /technical 修复；设计变了 → /idea-refine / /analysis Plan
   (1) 先回流（推荐） (2) 了解风险，继续写 Discussion
 ```

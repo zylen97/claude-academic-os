@@ -75,7 +75,7 @@ git log -15 --date=short --format="%ad %s"
 
 ## 步骤 6.5：日期检查（规格 §4.6）
 
-记 `C` = `analysis_plan.md` 第 7 节最后一条日期，`R` = register 发布日期，`T` = 技术正文完成日期。`T` 存在且 `C > T` 或 `R > T` → 记为"技术正文可能过期"，在步骤 8 中给出回流路线（register 变了 → `/technical` 修复；设计变了 → `/idea-refine` / `/analysis` Plan）。只提醒，不阻断。
+记 `C` = `analysis_plan.md` 第 7 节最后一条时刻，`R` = register 发布时刻，`T` = 技术正文完成时刻（按时刻比较，旧条目只有日期时按规格 §4.6 处理）。`T` 存在且 `C > T` 或 `R > T` → 记为"技术正文可能过期"，在步骤 8 中给出回流路线（register 变了 → `/technical` 修复；设计变了 → `/idea-refine` / `/analysis` Plan）。只提醒，不阻断。
 
 ---
 

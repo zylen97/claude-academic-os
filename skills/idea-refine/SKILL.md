@@ -179,7 +179,7 @@ Follow the output format in your instructions (Part I tables incl. Dim 5 and Dim
 === 设计层改动判定 ===
 是否涉及 RQ→结论目标、模型族 / 主设定 / 数据边界、任务、检验（即计划第 1、3、4、5 节的内容）：是 / 否
 {是且计划已 approved：}
-  - analysis_plan.md 第 7 节追加：| {今天} | 【设计层】{改了什么} | {原因} | {影响 register / technical / narrative 的哪些部分} |
+  - analysis_plan.md 第 7 节追加：| {当前时刻 YYYY-MM-DD HH:MM} | 【设计层】{改了什么} | {原因} | {影响 register / technical / narrative 的哪些部分} |
   - 项目阶段：仅当当前为 analysis 或 drafting 时 → foundation（状态行保持 approved；第 7 节最后一条【设计层】之后没有"重新批准计划"行，即表示须经 /analysis Plan 重新批准）；当前为 foundation 则不变；submitted / revision-R{N} 不改阶段
   - 下一步：/analysis Plan 更新第 1、3、4、5 节并重新批准
 

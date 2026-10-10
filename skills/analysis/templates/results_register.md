@@ -1,5 +1,5 @@
 # 结果登记表 — {ID}
-发布: YYYY-MM-DD（对应 analysis_plan 批准日期 YYYY-MM-DD）
+发布: YYYY-MM-DD HH:MM（对应 analysis_plan 批准日期 YYYY-MM-DD）
 
 <!-- 每行一条结果。
      ID：F1, F2…（F = finding；不用 R，避免与审稿意见编号 R1-1 混淆）（重新发布时已有 ID 不改号，新增条目往后编号，删除的条目不复用其编号）。

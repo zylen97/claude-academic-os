@@ -203,7 +203,7 @@ AskUserQuestion：
 策略确认后、起草之前执行。本技能不做分析、不改技术章节正文，也不改项目阶段：
 
 1. 告诉用户回流路线，并停止本次运行：
-   - `/analysis`：在 `analysis_plan.md` 第 7 节追加一行（日期｜改了什么｜原因：回应 {Comment ID}｜影响：register 的哪些条目 / technical 的哪些段落 / narrative 的哪些部分），经用户确认后 Run → Release，重新发布 `results_register.md`（新结果追加新 ID，原 ID 不改号）。修改阶段内 analysis 不改阶段。
+   - `/analysis`：在 `analysis_plan.md` 第 7 节追加一行（时刻 YYYY-MM-DD HH:MM｜改了什么｜原因：回应 {Comment ID}｜影响：register 的哪些条目 / technical 的哪些段落 / narrative 的哪些部分），经用户确认后 Run → Release，重新发布 `results_register.md`（新结果追加新 ID，原 ID 不改号）。修改阶段内 analysis 不改阶段。
    - 意见触及设计层时，先 `/idea-refine`（同样只记变更、不改阶段），再回到 `/analysis`。
    - `/technical`（修复模式）：按新 register 修复受影响的技术段落，完成后重写 `technical_map.md` 的依据日期与"技术正文完成"日期。
 2. 回流完成后，用户重新运行 `/rev-respond {Comment ID}`，在 0e 选 **3** 沿用策略继续。
@@ -664,16 +664,16 @@ Revision Package Audit：PASS
 
 **日期检查（规格 §4.6，取代哈希链；只提醒，不阻断）**
 
-读取四个日期（都在 `structure/0_global/` 下）：
+读取四个时刻（都在 `structure/0_global/` 下）：
 
 | 记号 | 来源 |
 |---|---|
-| P | `analysis_plan.md` 第 7 节"变更记录"表中最晚的日期（表为空 → 无） |
+| P | `analysis_plan.md` 第 7 节"变更记录"表中最晚的时刻（表为空 → 无） |
 | R | `results_register.md` 的 `发布:` 行第一个日期（register 发布日期） |
-| M | `technical_map.md` 的 `依据: results_register 发布 YYYY-MM-DD` 中的日期 |
+| M | `technical_map.md` 的 `依据: results_register 发布 …` 中的时刻 |
 | T | `technical_map.md` 的 `技术正文完成:` 日期（technical Tex 结束时写入） |
 
-逐条判定（"晚于" = 严格晚于；同一天不算晚于）：
+逐条判定（"晚于" = 按时刻严格晚于，规则见规格 §4.6）：
 
 | # | 条件 | 含义 | 回流 |
 |---|---|---|---|
@@ -694,7 +694,7 @@ D4 / D7 的回流范围按变更行"影响"列判断：
 - "影响"列明确写"不影响 register / technical"（只影响 narrative）→ 只提醒复核 narrative 对应部分；
 - "影响"列为空或写不清 → 按第二种（analysis → technical）提醒。
 
-P 或 R 与 T 是同一天时，不判为晚于，但注明"同日，日期无法区分先后，请确认该变更已反映在技术正文中"。
+比较的一方是只写了日期的旧条目、且与另一方同一天时，不判为晚于，但注明"旧条目只有日期，无法区分先后，请确认该变更已反映在技术正文中"。
 
 输出格式：先列出触发的条目（编号、涉及的日期、对应变更行原文），再给出**一条合并后的回流路线**（去重并按 idea-refine → analysis Plan → analysis Run/Release → technical → narrative 的顺序排列），最后注明"完成回流后重新运行本技能"。没有触发任何条目时输出"日期检查：通过（P=…，R=…，M=…，T=…）"。日期只用于判断先后，不作为任何正文内容的来源。
 

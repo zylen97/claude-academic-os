@@ -172,7 +172,7 @@ paper-init（出版社 + 方法 profile）
 ## 4 任务清单              （T1…；内容；产出文件）
 ## 5 检验与稳健性          （profile 必做项 + 项目特有项）
 ## 6 解读边界              （不得声称什么）
-## 7 变更记录              （只追加：日期｜改了什么｜原因｜影响 register/technical/narrative 的哪些部分）
+## 7 变更记录              （只追加：时刻｜改了什么｜原因｜影响 register/technical/narrative 的哪些部分）
 ```
 
 规则：
@@ -183,7 +183,7 @@ paper-init（出版社 + 方法 profile）
 
 ```
 # 结果登记表 — {ID}
-发布: YYYY-MM-DD（对应 analysis_plan 批准日期 YYYY-MM-DD）
+发布: YYYY-MM-DD HH:MM（对应 analysis_plan 批准日期 YYYY-MM-DD）
 | ID | 类型 | 内容（一句话） | 来源（文件#锚点 / 脚本→输出） | RQ | 必报 | 解读边界 |
 ```
 - ID 用 `F1, F2…`（finding；不用 R，避免与审稿意见编号 R1-1 混淆）；重新发布时已有 ID 不改号，删除的编号不复用。
@@ -195,7 +195,7 @@ paper-init（出版社 + 方法 profile）
 
 ```
 # 技术章节结构 — {ID}
-依据: results_register 发布 YYYY-MM-DD｜技术正文完成: （technical Tex 结束时写入日期）
+依据: results_register 发布 YYYY-MM-DD HH:MM｜技术正文完成: （technical Tex 结束时写入 YYYY-MM-DD HH:MM）
 ## 1 章节结构   | section/subsection 标题 | 角色(method/results/simulation) | 段落任务 | register ID | 表/图 |
 ## 2 术语表     | 术语 | 定义 | 不得混用的近义词 |
 ## 3 报告基准   （默认复用设计基准，另加 1–2 篇目标期刊样例；只决定组织与披露）
@@ -206,8 +206,9 @@ paper-init（出版社 + 方法 profile）
 
 ### 4.6 失效与回流（替代哈希链）
 
-- 判断依据只有日期：`analysis_plan.md` 第 7 节最后一条变更日期、`results_register.md` 发布日期、`technical_map.md` 技术正文完成日期。
-- `technical`、`narrative`（Discussion）、`finalize`、`pre-submit` 开始前比较日期：若变更记录或 register 晚于技术正文完成日期 → 提醒并给出回流路线（register 变了 → technical 修复；设计变了 → idea-refine / analysis Plan）。
+- 判断依据只有三个时刻：`analysis_plan.md` 第 7 节最后一条变更、`results_register.md` 发布、`technical_map.md` 技术正文完成。
+- 三者都写到分钟：`YYYY-MM-DD HH:MM`（本地时间，取 `date '+%Y-%m-%d %H:%M'`），按时刻严格先后比较。迁移前只写了日期的旧条目：与另一方不在同一天时照常按日期比较；在同一天时不判先后，提醒用户确认。
+- `technical`、`narrative`（Discussion）、`finalize`、`pre-submit` 开始前比较时刻：若变更记录或 register 晚于技术正文完成时刻 → 提醒并给出回流路线（register 变了 → technical 修复；设计变了 → idea-refine / analysis Plan）。
 - 正文其他章节被修改不会使技术章节失效（不存在整稿哈希）。
 
 ### 4.7 各技能要点
