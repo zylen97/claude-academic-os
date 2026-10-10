@@ -1,5 +1,6 @@
 ---
-description: "学术论文图表全流程：自动判断 TikZ/Python/R → 创建概念图或数据图 → 美化已有图 → Eagle 风格参考 → 跨图一致性检查（Figure）"
+name: figure
+description: Create, redesign, or audit academic figures with method-aware and benchmark-first visual design using TikZ, Python, or R; enforce journal sizing, strict alignment, final-size readability, and cross-figure semantic consistency.
 ---
 
 # Figure — 学术论文图表全流程
@@ -15,47 +16,44 @@ description: "学术论文图表全流程：自动判断 TikZ/Python/R → 创�
 
 ---
 
-## Morandi 色板（全局标准，不可变更）
+## 设计立场：方法、benchmark 与期刊约束优先
 
-所有图表必须使用此色板，不允许使用 matplotlib/ggplot 默认色或其他色板。
+图的专业性首先来自**方法语义正确、视觉语法匹配、严格对齐和最终尺寸可读**，不是来自某套固定色板。执行优先级固定为：
 
-| 名称 | 深色 | 浅色 | 用途 |
-|:-----|:-----|:-----|:-----|
-| Steel Blue | `#576fa0` | `#a7b9d7` | 主色系 |
-| Gold | `#e3b87f` | `#fadcb4` | 辅助色/对比 |
-| Rose | `#b57979` | `#dea3a2` | 强调/警示 |
-| Gray | `#7c7c7c` (dark) / `#b5b5b5` (mid) | `#cfcece` (light) | 结构/次要元素（三档灰） |
+1. 论文中的研究问题、方法和真实数据关系；
+2. 相同方法、相同图件功能的 benchmark 论文；
+3. 目标期刊的官方尺寸、字体、线宽和可访问性要求；
+4. 项目内其他图的跨图一致性；
+5. 默认视觉 profile。
 
-> **Gray 三档**：TikZ 结构色（层容器虚线边、结构箭头、文本）用 `#7c7c7c`（深，实战中 `#9f9f9f` 太淡看不清）；I/O 盒/日志带等背景块用 `#b5b5b5` 的 !45~!55；浅色辅助区域用 `#cfcece`。
+新建或重画图时必须读取 `references/method-benchmark-design.md`。TikZ 结构图还必须读取 `references/tikz-semantic-minimal.md`，默认从 `assets/tikz_semantic_minimal.tex` 开始。
 
-**TikZ 定义**：
-```latex
-\definecolor{steelblue}{HTML}{576fa0}
-\definecolor{steelbluelight}{HTML}{a7b9d7}
-\definecolor{gold}{HTML}{e3b87f}
-\definecolor{goldlight}{HTML}{fadcb4}
-\definecolor{rose}{HTML}{b57979}
-\definecolor{roselight}{HTML}{dea3a2}
-\definecolor{morandigray}{HTML}{7c7c7c}       % 结构色（深）
-\definecolor{morandigraymid}{HTML}{b5b5b5}    % I/O 盒 / 日志带（中）
-\definecolor{morandigraylight}{HTML}{cfcece}  % 辅助区域（浅）
-```
+### 默认 profile
 
-**Python**：
-```python
-MORANDI = {
-    "steel_blue": "#576fa0", "steel_blue_light": "#a7b9d7",
-    "gold": "#e3b87f", "gold_light": "#fadcb4",
-    "rose": "#b57979", "rose_light": "#dea3a2",
-    "gray": "#7c7c7c", "gray_mid": "#b5b5b5", "gray_light": "#cfcece",
-}
-```
+- **TikZ 结构图、流程图、机制图**：默认 `semantic-minimal`。白底；框、主流程箭头、分区带等结构元素一律灰；颜色只编码已声明的语义类别，最多三组语义色对（浅填 + 深边，token 见 `references/tikz-semantic-minimal.md` 第 2 节），用了就必须有图例或直接标注；可选 / 辅助对象用灰色虚线框；反馈 / 回流用橙色虚线。母版是 zy02 的信息结构图。
+- **Python/R 数据图**：沿用同一组 token——中性基线用灰，需要区分的类别依次用 A 蓝、B 橙、C 绿（深色 D 画线 / 点，浅色 F 作填充或置信带）；颜色映射到变量语义并在全篇保持一致。类别超过三个时，先考虑分面、直接标注或线型，不扩色。禁止软件默认色板。
+- **journal-minimal-monochrome**：期刊要求黑白或用户指定时使用，见 `references/tikz-journal-minimal.md`。
+- **legacy-morandi**：仅当用户明确指定 Morandi，或既有项目已经锁定该视觉语言时使用，见 `references/legacy-morandi.md`。
 
-**R**：
-```r
-morandi <- c("#576fa0", "#e3b87f", "#b57979", "#7c7c7c",
-             "#a7b9d7", "#fadcb4", "#dea3a2", "#b5b5b5", "#cfcece")
-```
+### 图标题与图注（所有创建、修改和审计路线）
+
+- 图片必须使用简短、描述性的标题，优先采用一个名词短语；英文通常以 3–10 个词为目标，准确性优先，不为凑字数删去必要对象。
+- `\caption{}` 只放短标题，不将面板逐项说明、参数设定、方法解释或结果讨论写成标题段落。
+- 必须保留的面板说明、符号、单位、情景条件或来源另放图下 Notes；只写读图必需的信息，结果解释放正文。不得因缩短标题而丢失必要信息。
+- 图内通常不再重复整图标题；需要面板标题时同样使用短语。具体期刊有明确不同要求时按期刊要求处理。
+- 完成时核对正文 caption 与图表注册表标题一致；审计同时检查标题是否简短、解释是否归位。
+
+### 核心禁令
+
+- 不得先选颜色再决定图的结构。
+- 颜色只能编码已声明的语义：一种颜色全图只表达一种含义，最多三组；不得为分层、分阶段、分时期或"好看"上色，结构元素一律灰。
+- 不得随意混用实线框和虚线框：实线框表示参与主流程的对象；灰色虚线框只表示可选 / 辅助对象；虚线分组框只表示重复或条件性阶段（须在组标题写明）。项目另有语义时必须在设计摘要中声明。
+- 不得让同一种虚线同时表示分组、复制、滞后和反馈；每种线型必须保持单一语义，并优先直接标注。
+- 不得为了“像 benchmark”复制其装饰；只借鉴与方法和读者任务相匹配的布局、视觉语法和信息层级。
+- 不得用箭头暗示未被模型估计的因果、反馈或共同演化关系。
+- 不得把不同数据对象画成“多层网络”，除非层间边有明确的数据或模型含义。
+- 不得用大面积彩色填充、渐变、阴影、3D、装饰性图标或重复图例制造复杂感。
+- 不得在未检查最终印刷尺寸、灰度和嵌入正文效果前宣称完成。
 
 ---
 
@@ -72,6 +70,19 @@ morandi <- c("#576fa0", "#e3b87f", "#b57979", "#7c7c7c",
 - **LaTeX 路径契约**：建议主 tex 文件 preamble 添加 `\graphicspath{{structure/figures_tables/figures/}{figures_tables/figures/}{figures/}}`（paper-init 的 manuscript.tex.tmpl 应含此行），这样 `\includegraphics{fig1_foo.pdf}` 使用纯文件名即可，不受 `/finalize` 前后目录迁移影响。
 - 扫描 `{FIGURES_DIR}` 目录 → 列出已有图文件 → `{FIGURE_INVENTORY}`
 - 读取主 tex 文件 → 找所有 `\includegraphics` 和 `\input{fig*}` → 了解图在论文中的位置
+
+### 0.1.1 方法与 benchmark 证据门（创建和重大重画时强制）
+
+在讨论颜色和盒子前，先完成一页以内的设计证据摘要：
+
+1. **Figure role**：该图在论文中承担 overview、method mechanism、data construction、identification、results、robustness 或其他什么任务？
+2. **Method semantics**：哪些对象、方向、时间顺序、层级和不对称关系必须被准确画出？哪些连线会构成方法论误读？
+3. **Reader task**：读者看图后必须能回答哪一个问题？
+4. **Benchmark set**：优先读取项目 `structure/**/benchmark/`、参考论文 PDF 和已提取图片；不足时用 `figure-harvest` 或 `web-access` 获取 2--5 张相同方法且相同图件功能的参考图。
+5. **Visual grammar extraction**：记录 benchmark 的布局骨架、阅读方向、面板层级、对齐方式、节点/边语义、标签密度、图例策略和正文配合，而不只记录颜色。
+6. **Borrow / reject**：明确借鉴什么、拒绝什么，以及拒绝原因。
+
+若没有足够 benchmark，使用 `semantic-minimal` 保守设计，并明确这是默认推断。详细模板和常见方法映射见 `references/method-benchmark-design.md`。
 
 ### 0.2 解析 `$ARGUMENTS`
 
@@ -125,21 +136,22 @@ morandi <- c("#576fa0", "#e3b87f", "#b57979", "#7c7c7c",
 
 ---
 
-## 步骤 1：Eagle 参考搜索（Routes A/B/C 共享）
+## 步骤 1：Benchmark 优先，Eagle 补充（Routes A/B/C 共享）
 
-所有创建和美化路由都可以使用 Eagle 参考。也可通过 `/figure eagle {标签}` 独立运行。
+学术 benchmark 是首要参考：先找相同方法和相同图件功能，再看相邻领域的顶刊图。Eagle 仅用于补充构图和视觉细节，不能替代方法 benchmark。也可通过 `/figure eagle {标签}` 独立运行。
 
 ### 1.1 询问参考来源
 
 AskUserQuestion：
 ```
-需要参考图吗？
-(1) 从 Eagle 图库搜索（输入标签，如"博弈论"）
-(2) 我直接提供参考图（粘贴路径或图片）
-(3) 不需要参考，直接开始
+参考来源：
+(1) 项目 benchmark / 论文 PDF（默认）
+(2) 从 Eagle 图库补充搜索
+(3) 我直接提供参考图
+(4) 暂无参考，使用 semantic-minimal 保守设计
 ```
 
-用户选 (3) → 跳过此步骤，进入路由执行。
+只有用户选 (4) 且本地也无可用 benchmark 时，才跳过参考提取。
 
 ### 1.2 Eagle 标签搜索
 
@@ -194,6 +206,9 @@ AskUserQuestion（如 `$ARGUMENTS` 未提供足够信息）：
 同时读取项目上下文：
 - `structure/0_global/idea.md` → 研究框架理解
 - 项目合同 `CLAUDE.md` 的 `## 技术章节` 中角色为 method 的 manuscript 章节；analytical-model 项目另读 `structure/3_analysis/derivation/` 中的模型设定文件 → 模型结构（如果画模型图）
+- `manuscript.tex` 目标章节 → 图前后正文
+- `structure/**/benchmark/` 与 benchmark 论文图片 → 提取相同方法、相同图件功能的视觉语法
+- 目标章节正文与图注上下文 → 确认该图前后文字分别承担什么解释
 - 已有 `fig*.tex` → 风格一致性参考
 
 ### 2A.2 提议设计方案
@@ -214,13 +229,27 @@ AskUserQuestion（如 `$ARGUMENTS` 未提供足够信息）：
   │  元素 C   │
   └──────────┘
 
-配色:
-- 主体框: steelbluelight
-- 强调框: goldlight
-- 背景区域: morandigraylight
-- 连接线: morandigray
+方法语义:
+- 必须可见: {对象、时间、层级、方向、不对称关系}
+- 禁止暗示: {未估计的因果、反馈、多层关系或阶段}
 
-{如有 Eagle 参考} 参考图风格借鉴: {具体说明借鉴了参考图的哪些要素}
+Benchmark 证据:
+- 参考图: {论文 + figure 编号}
+- 借鉴: {布局、视觉语法、信息层级、对齐方式}
+- 不照搬: {装饰或不适用于本文方法的元素}
+
+布局与对齐契约:
+- 目标成稿宽度: {mm / 单栏 / 双栏}
+- 固定列 x: {...}
+- 固定行 y: {...}
+- 主阅读路径: {...}
+
+视觉 profile:
+- 默认 semantic-minimal: 白底 + 灰色结构 + ≤3 组语义色
+- 语义色分配: A 蓝 = {...}；B 橙 = {读者必须看到的关键语义}；C 绿 = {...}（不用的删掉）
+- 虚线框语义: {可选 / 辅助；或重复阶段}
+- 连线语义: 灰实线 = 主流程；同色实线 = {语义流}；橙虚线 = {反馈 / 回流}
+- 图例: {图底一行 / 直接标注}
 
 确认方案？可以调整布局、元素、配色。
 ```
@@ -229,371 +258,36 @@ AskUserQuestion（如 `$ARGUMENTS` 未提供足够信息）：
 
 ### 2A.3 生成 standalone .tex
 
-按照项目已有 TikZ 图的风格（从 `{FIGURE_INVENTORY}` 中已有 .tex 文件提取）生成代码。
+按照已确认的 method/benchmark 设计摘要生成代码。项目既有风格只有在不损害方法语义、最终尺寸可读性和专业性时才继承；旧图风格存在缺陷时不得机械复制。
 
 **强制规范**：
-- `\documentclass[tikz, border=10pt]{standalone}`
-- `\usepackage{newtxtext,newtxmath}`
-- `\usetikzlibrary{arrows.meta, positioning, calc}`（基础三件套）；若需背景层用 `backgrounds`；若画 shape 用 `shapes.geometric`；**不要用 `fit`**（见 2A.3.1 C1，fit 会导致多层容器偏心）
-- 箭头样式：`Stealth`
-- Morandi 色板 `\definecolor`（见上方定义，含三档灰 `morandigray`/`morandigraymid`/`morandigraylight`）
-- 默认填充：`steelbluelight!50`（主体）、`goldlight!55`（辅助）、`morandigraymid!55`（I/O 盒）；**fill 饱和度 `!45` 起步**，低于此盒子在 PDF 里会"消失"（见 2A.3.1 B.1）
-- 线宽：`thick`（0.8pt 默认）、强调可用 `very thick`
-- 文本：`\small` 或正常大小；**多行文本禁止依赖 `\\`**（有时静默失效），用 2A.3.1 C3 的"空容器 + 独立子节点"模式
+- `\documentclass[tikz, border=6pt]{standalone}`，从 `assets/tikz_semantic_minimal.tex` 起步。
+- 字体：英文图 `\usepackage{newtxtext,newtxmath}`（pdflatex）；中文图首行 `% !TEX program = xelatex`，`fontspec` + `xeCJK`，`\setmainfont{Times New Roman}`、`\setCJKmainfont{Songti SC}[BoldFont=Heiti SC]`。目标期刊另有字体要求时按期刊。
+- `\usetikzlibrary{positioning, arrows.meta, calc}` 为基础；需要底层分区带时加 `backgrounds`；**不用 `fit`**（见 2A.3.1）。
+- 箭头 `Stealth`。
+- 颜色只用模板 token：结构灰 `ink/muted/optF/bandA/bandB`，语义色对 `sAF/sAD`、`sBF/sBD`、`sCF/sCD`；不新增其他颜色。
+- 每种语义色、虚线框、反馈虚线都要在图例或直接标注中说明含义。
+- 线宽按最终尺寸：框边 0.5pt，主箭头 0.6pt，反馈虚线 0.8pt，关键语义框 ≤ 0.9pt。
+- 文本按最终嵌入尺寸检查，通常 7–8pt；阶段 / 面板标题 `\small\bfseries`，句首大写。
+- 多行文字的 style 必须同时有 `align` 和 `text width`。
+- 开发阶段先写坐标账本（注释，ASCII），同列同 x、同行同 y。
 
 写入 `{FIGURES_DIR}fig{N}_{description}.tex`。
 
-#### 2A.3.1 分层流程图（Layered architecture diagram）完整手册
-
-> 本节是**画架构图/流程图/分层图的唯一参考**。按 A-G 七个模块顺序阅读：A 原则 → B 色彩 → C 元素 → D 坐标 → E 路径 → F 场景 → G 陷阱速查。新手从 F 场景配方开始抄；进阶看 C 元素手册按需组合；出 bug 看 G 速查。
-
----
-
-##### A. 三条设计原则（永远不变）
-
-1. **自顶向下阅读**：层编号 1→N 从上到下；输入盒在顶、输出盒在底；主信息流向下
-2. **三色点睛 + 其余全灰**：整图最多 3 种语义色，结构性元素（容器、流程、I/O、日志、普通箭头）一律 `morandigray`
-3. **主/反差异**：主流程 = 实线 + 结构灰；反馈/回流 = 虚线 + 语义色。靠线型和颜色双重区分
-
----
-
-##### B. 色彩体系
-
-**色板**（见 SKILL.md 顶部 Morandi 定义）：
-```latex
-\definecolor{steelblue}{HTML}{576fa0}       \definecolor{steelbluelight}{HTML}{a7b9d7}
-\definecolor{gold}{HTML}{e3b87f}            \definecolor{goldlight}{HTML}{fadcb4}
-\definecolor{rose}{HTML}{b57979}            \definecolor{roselight}{HTML}{dea3a2}
-\definecolor{morandigray}{HTML}{7c7c7c}     \definecolor{morandigraymid}{HTML}{b5b5b5}
-\definecolor{morandigraylight}{HTML}{cfcece}
-```
-
-**语义分配示例**（需结合论文主题选定）：
-| 色 | 典型语义 | 示例 |
-|:---|:---------|:-----|
-| Steel blue | 知识/检索/显性/默认主体 | RAG / explicit_RAG / Stage-1 知识类 |
-| Gold | 执行/计算/隐性/工具调用 | FC / tacit_FC / Stage-2 评估 |
-| Rose | 人工/干预/反馈/警示 | Human review / Override / Key principle callout |
-| Gray(morandigray) | 结构/流程/日志/辅助 | 容器、主流程箭头、DTT 带、I/O 盒 |
-
-**配对硬规则**：
-- **B.1 Fill ≥ !50 饱和度**：低于 !45 的填充在 PDF 里几乎看不见，盒子"消失"。常用 `!50-!60`
-- **B.2 Fill XOR Draw**：盒子要么填彩色（边默认无/灰），要么只描彩边（填白）；不要同时 `fill=彩色 + draw=同色`（双装饰污染）
-- **B.3 稳定模式 = 灰边 + 彩填**：`draw=morandigray + fill=accent!50` 是**唯一**能保证任何色都能渲染的组合
-- **B.4 xcolor 冲突警告**：`draw=steelblue, fill=white` 经常**边框画不出**（xcolor 有同名预定义色可能占用解析），换用 B.3 方案或改用灰边
-
----
-
-##### C. 元素手册（逐个元素的稳定模式）
-
-###### C1. 层容器（Layer container）
-
-```latex
-layerbox/.style={draw=morandigray, thick, fill=none,
-    rounded corners=8pt, dash pattern=on 3pt off 2pt},
-\node[layerbox, minimum width=15.6cm, minimum height=3.3cm] (L1) at (7.5, 5.5) {};
-```
-
-硬规则：
-- 圆角 `rounded corners=8pt` 必须（无圆角生硬）
-- dash pattern 必须显式写 `on 3pt off 2pt`（默认 `dashed` 在圆角处 dash 不规律，看起来像斜线）
-- `fill=none` 必须（填色 + 虚线双重装饰污染）
-- **用显式坐标放置**：`at (center_x, y)` + `minimum width/height` 指定。**绝不用 `fit`**（fit 按内容 bounding box 算，不同层边界不同会算出偏心，上下层对不齐）
-- 多层容器同宽（同 `minimum width`） + 同中心 x（统一 `center_x`）
-
-###### C2. 层标签（Layer label）
-
-```latex
-layerlabel/.style={font=\footnotesize\bfseries, text=morandigray},
-\node[layerlabel, anchor=south west] at ($(L1.north west)+(0.1,0.08)$)
-    {Layer 1: Dual knowledge base};
-```
-
-- 放容器**外部顶部**（`anchor=south west` + 向上 0.08cm 偏移），避免被虚线边框切过
-- 不放容器内部（除非容器有填色能遮挡虚线）
-- **如果容器顶部外侧还要走 backtrack/overflow 弧线** → label 会和弧线 label 抢位置 → 把 layer label 换到右上角：`anchor=south east @ container.north east`
-
-###### C3. 内容盒 —— 空容器 + 独立子节点模式（C3 是本手册最重要的 recipe）
-
-**禁止**单节点内 `\\` 多行，因为 `\\` 在不同 style 下会静默失效（症状："Chunking117 chunks" 同一行）。
-
-**稳定模式**：盒子是**空容器**，内部每个元素用**独立节点**，相对 `(B.north)` 用 `yshift` 定位。
-
-```latex
-% style 定义
-stageblue/.style={draw=morandigray, fill=steelbluelight!50,
-    rounded corners=4pt, thick,
-    minimum width=2.9cm, minimum height=2.6cm},
-title/.style={font=\small\bfseries, anchor=center},
-sub/.style  ={font=\scriptsize, anchor=center},
-body/.style ={font=\scriptsize, text=black!75, align=left,
-    anchor=north west, text width=2.4cm},  % text width 比 minimum width 小 0.4-0.5cm
-
-% 使用（假设 B 的宽度为 2.9cm，半宽 1.45cm）
-\node[stageblue] (B) at (x, y) {};                              % 空容器
-\node[title] at ($(B.north)+(0, -0.30)$) {Stage 1};             % 距顶 0.30cm
-\node[sub]   at ($(B.north)+(0, -0.62)$) {Identification};      % 距顶 0.62cm（与 title 间隔 0.32cm）
-\draw[steelblue!40, thick]                                       % 分隔线：跨盒内部 2/3 宽
-    ($(B.north)+(-1.20, -0.85)$) -- ($(B.north)+(1.20, -0.85)$);
-\node[body] at ($(B.north)+(-1.15, -0.97)$) {%                  % body 从分隔线下 0.12cm 开始
-    RAG: cases, contracts\\[1pt]
-    FC: ---\\[1pt]
-    Out: type, precedents};
-```
-
-**在 body 节点里**，`\\[Npt]` 行间距还算稳定（因为有 `align=left` + 显式 `text width`），但避免超过 3 行；超过 3 行建议拆多个 body 节点。
-
-**盒内元素垂直预算**（高度 2.6cm 的盒子）：
-| 元素 | 垂直占用 |
-|:-----|:---------|
-| title (距顶 0.3) | 0.3 cm 偏移 |
-| sub (距顶 0.62) | 0.3 cm 偏移 |
-| 分隔线 (距顶 0.85) | 0.2 cm |
-| body (从 0.97 起 + 4 行 + 行距) | ~1.3 cm |
-| 底部留白 | ≥ 0.3 cm |
-| **总** | ~2.6 cm ✓ |
-
-如果 body 内容更多 → 增加 `minimum height` 到 3.0+ cm。
-
-###### C4. I/O 盒（输入 / 输出 / 数据带）
-
-```latex
-iobox/.style={draw=none, fill=morandigraymid!55, rounded corners=3pt,
-    minimum width=2.6cm, minimum height=0.8cm, align=center,
-    font=\small\bfseries, text=black!85},
-\node[iobox] (cr) at (center_x, top_y)    {CR Input};
-\node[iobox] (ar) at (center_x, bottom_y) {AR Output};
-```
-
-- 固定灰色无边框，和彩色盒子视觉区分
-- 位置：图顶（输入）和图底（输出），在层容器**外部**
-- I/O 和层容器之间用短垂直箭头（0.5-1.0cm 长）连接
-
-###### C5. 主流程箭头（实线灰）
-
-```latex
-arrow/.style={->, thick, morandigray},
-\draw[arrow] (A.east) -- (B.west);                         % 水平
-\draw[arrow] (center_x, y_from) -- (center_x, y_to);       % 垂直（显式坐标，不用 anchor）
-```
-
-- 水平：用 `.east -- .west`
-- **垂直：必须用显式坐标** `(center_x, y1) -- (center_x, y2)`，不要用 `A.south -- B.north`（不同大小盒子 anchor 点计算可能偏差）
-- 箭头长度 0.5-1.5cm（外观最清爽）
-- midway label：`node[chanlabel, midway, above] {text}`，`chanlabel/.style={font=\scriptsize, text=morandigray!90!black}`
-
-###### C6. 反馈 / 回流路径（虚线语义色）
-
-```latex
-rosepath/.style={->, thick, rose, dash pattern=on 3pt off 2pt},
-```
-
-**绝对禁止** `-|` / `|-` 搭配 `rounded corners`（TikZ 圆角算法画出的弧不工整，经常比预期大或歪）。
-
-**场景 a：单个锐角拐弯**（可以不用圆角）：
-```latex
-\draw[rosepath]
-    (src.east) -- ++(0.5, 0) -- ++(0, -2.1) -- (dst.east);    % 三段显式 polyline
-```
-
-**场景 b：必须圆角**（比如 backtrack 弧上去再左折下来）：
-```latex
-\draw[rosepath, rounded corners=4pt]
-    (pm.north) -- ++(0, 0.45) -| (s1.north)
-    node[chanlabel, text=rose, pos=0.3, above] {Backtrack};
-```
-`-|` 在这里可用，因为弧线不和其他 rounded corner 图形相交，视觉上圆角弧够小够工整。如果路径多次拐弯 → 拆成多段手写 polyline。
-
-**场景 c：绕过其他盒子**：
-如果 A→B 的直线路径天然穿过盒 C（或 C 的 y 范围）：
-- 方案 1：把 C 挪走
-- 方案 2：路径多绕一段（从 A 向外走足够距离，再拐向 B）
-- **不让路径穿过任何盒体**
-
-###### C7. 跨层索引 / 依赖虚线（小短路径）
-
-```latex
-\draw[->, thick, morandigray, dash pattern=on 3pt off 2pt]
-    (src.south) -- (dst.north);
-```
-
-- 用**灰虚线**而非玫瑰色（玫瑰留给"反馈/干预"语义）
-- 短、直、少拐弯
-- 用于 DTT source_id 依赖、vector store → retrieve 的 index 连接等
-
-###### C8. 标题 + metadata（图顶部元数据）
-
-**硬规则：两行分开 y，不同 y 坐标**：
-```latex
-\node[font=\small\bfseries, text=black!85] at (center_x, y1)
-    {Case A30 (P2 laboratory) --- DTT excerpt};
-\node[font=\scriptsize, text=morandigray!90!black] at (center_x, y1 - 0.4)
-    {KCR = 1.00 \quad ETR = 0.32 (S2, S3) / 1.94 (S4)};
-```
-
-- y 间距约 0.4cm
-- 字号对比清晰：主 `\small\bfseries`，副 `\scriptsize`
-- 若同 y 放两 node 且 x 跨度重叠 → 文字会叠印（典型 bug）
-
-###### C9. 关键原则 callout（rose 边 + 白填）
-
-```latex
-notebox/.style={draw=rose, thick, fill=white, rounded corners=3pt,
-    font=\scriptsize, text=rose, text width=8cm, align=center, inner sep=5pt},
-\node[notebox] (principle) at (center_x, top_y) {%
-    \textbf{Key principle}: the LLM does not compute;
-    all quantitative reasoning is performed by FC functions.};
-```
-
-- 放图最顶或图中醒目位置
-- 内容短而关键（一句话原则）
-- 作为视觉锚点，吸引读者第一眼看到
-
-###### C10. 图例（legend）
-
-- 底部一行水平列出，左对齐或均分
-- 每项：`\node[font=\scriptsize, text=<accent>, anchor=west] at (x, y) {\textbullet\ 说明}`
-- 条目间 x 间距 ≥ 3cm 防挤
-- 最后一条通常是 arrows 含义说明（灰色文本）
-
-```latex
-\node[font=\scriptsize, text=steelblue!85!black, anchor=west]
-    at (0.2, -4.3) {\textbullet\ explicit\_RAG (retrieved)};
-\node[font=\scriptsize, text=gold!75!black, anchor=west]
-    at (4.8, -4.3) {\textbullet\ tacit\_FC (computed)};
-\node[font=\scriptsize, text=morandigray, anchor=west]
-    at (8.9, -4.3) {arrows: source\_id $\rightarrow$ dependent node};
-```
-
----
-
-##### D. 坐标布局公式（布局前必须手算）
-
-###### D1. 盒子间距公式
-
-对每对相邻盒 A、B（中心 x_A、x_B，宽度 w_A、w_B）：
-```
-gap(A, B) = x_B - w_B/2 - (x_A + w_A/2)
-必须  gap ≥ 0.4 cm，建议 0.5-0.7 cm
-```
-
-**在 .tex 开头用注释写出所有 x 位置**，作为自检：
-```latex
-% Row positions (all gaps = 0.5 cm):
-%   s1 center=0.85  w=2.6  span [-0.45, 2.15]
-%   s2 center=3.95  w=2.6  span [ 2.65, 5.25]   gap to s1 = 0.50 OK
-%   pm center=6.50  w=1.5  span [ 5.75, 7.25]   gap to s2 = 0.50 OK
-%   s3 center=9.05  w=2.6  span [ 7.75,10.35]   gap to pm = 0.50 OK
-%   s4 center=12.15 w=2.6  span [10.85,13.45]   gap to s3 = 0.50 OK
-%   hd center=14.70 w=1.5  span [13.95,15.45]   gap to s4 = 0.50 OK
-```
-
-若编辑 .tex 时注释里出现 Unicode `−` (U+2212) 或 `±` → unicode-guard 会拦下写入 → **注释只用 ASCII `-` 和 `+/-`**。
-
-###### D2. 容器宽度 / 高度
-
-```
-container_width  ≥ Σ(box_widths) + Σ(gaps) + 2 × padding      (padding ≥ 0.3 cm)
-container_height = box_height + top_space + bottom_space       (top/bottom ≥ 0.3 cm)
-```
-
-若容器顶部要走 backtrack 弧线：`top_space` 再加 0.5-0.6cm。
-
-###### D3. 多带图的上下带对齐
-
-上下两个 layerbox 同宽 + 同 center x + 对应列 x 相同。这样跨带垂直连线才能笔直。
-
-例（fig2 RAG pipeline）：
-- 上带 indexing：Chunk / Embed / Store 在 x=6.4 / 10.0 / 13.6
-- 下带 query：Cosine-top-k / Rerank 在 x=10.0 / 13.6（与上带同列）
-- index 虚线从 Store.south 直接垂直下到 Cosine-top-k.north，完全笔直
-
-###### D4. 多行堆叠（DTT 样式）
-
-每行一个背景带 + 固定行高：
-```
-row_y_step = box_height + row_gap    (row_gap ≥ 0.3cm)
-背景带 minimum_height = box_height + 0.25 cm  (盒子高度 + 小内边距)
-```
-
-例（fig5 DTT）：盒高 1.05cm + 行间距 0.35cm → row_y_step = 1.4cm。
-
-###### D5. 同列对齐（列 x 锁定）
-
-一旦确定某图用 N 列布局（N = 3/4/5），**所有行共享同一组列 x**。某行盒子数 < N 则右侧留空。不要重新均分（否则列错位）。
-
----
-
-##### E. 路径路由硬规则
-
-1. **E.1 垂直箭头用显式坐标**，不用 `.south / .north` anchor（不同大小盒子 anchor 计算会偏）
-2. **E.2 禁止** `-|` / `|-` 配 `rounded corners`（除非单次 90° 折角，场景 C6.b）
-3. **E.3 多段折线用显式 3 段 polyline**：`(x1,y1) -- (x2,y1) -- (x2,y2) -- (x3,y2)`
-4. **E.4 反馈路径绕图外部**，不穿越任何盒体
-5. **E.5 Backtrack 弧**：从 PM 顶 → 向上出容器 → 向左 → 向下入 S1 顶。容器高度要给弧线留 0.5cm+
-6. **E.6 Override feedback**：从 HD → 向右出容器 → 向下到 DTT 高度 → 向左入 DTT 东边。走右侧，不穿过中间内容
-7. **E.7 Index/依赖短链接**：纯灰虚线，`.south -- .north` 或显式坐标，不加 label 除非必要
-
----
-
-##### F. 五种常见场景的配方（直接抄）
-
-###### F.1 单行 N 个异构盒（fig4：4 stages + 2 humans）
-
-- 盒子按 D1 公式算好 x，gap 0.5cm
-- 水平主流程箭头 `.east -- .west`
-- 顶部 CR Input（iobox），底部 AR Output
-- 回流弧（Backtrack / Override）走容器上方/右侧外部
-- 容器 layer label 放右上角（避开 Backtrack label）
-
-###### F.2 两带平行布局（fig2：indexing + query）
-
-- 两个 layerbox 同宽 + 同 center x + 上下叠放
-- 上下带内部各自按 F.1 布局
-- 跨带箭头：虚线 3 段 polyline，或 `.south -- .north` 直连
-- 带间垂直距离 ≥ 1.5cm（给跨带虚线箭头呼吸空间）
-- 底部若有附加信息（preference note），用 rose notebox，dashed 箭头回指相关盒子
-
-###### F.3 上带 generic + 下带 example（fig3：通用 FC loop + S2→F1 实例）
-
-- 上带 3 个 phase box（主要尺寸，比如 4.6cm 宽 × 3.8cm 高）
-- 下带 3 个 example box（略小，比如 4.6cm 宽 × 2.6cm 高）
-- 两带用单条 "instantiates" 虚线垂直连接，在 center x
-- 上带 label "Generic ..."，下带 label "Example: ..."
-- 图顶放 Key principle rose callout 吸引注意
-
-###### F.4 多行 stage 堆叠（fig5：DTT 按 S1/S2/S3/S4 四行）
-
-- 每行一个背景色块（`fill=steelbluelight!15` 或 `!18`，低饱和度做分区）
-- 行间 y step 1.4cm（盒高 1.05 + 间距 0.35）
-- 固定 N 列（如 4 列，x=1.9, 5.0, 8.1, 11.2）
-- 每行最多 N 个盒子，少于 N 则右侧留空（不重排）
-- 行左侧 stage 标签 `anchor=east` @ 最左侧固定 x（如 0.2）
-- 顶部标题 + metadata 两行（C8），底部图例一行（C10）
-
-###### F.5 中心辐射（hub-and-spoke，本手册未实战，仅原则）
-
-- 中心放主体框，周围 4-6 个卫星框
-- 所有箭头从中心出发或指向中心（靠近中心的那端用 `.north/.south/.east/.west` 对应方向）
-- 卫星间不连线（避免干扰）
-- 用角度均布卫星位置：`at ({center_x + r*cos(angle)}, {center_y + r*sin(angle)})`
-
----
-
-##### G. 致命陷阱速查（出 bug 先查这 10 条）
-
-| # | 症状 | 原因 | 修复 |
-|:-:|:-----|:-----|:-----|
-| G1 | 盒子"消失"只剩文字 | `fill=color!30` 或更低 | fill 下限 `!45`，常用 `!50-!60` |
-| G2 | draw=steelblue 白填盒子边框不出 | xcolor 命名冲突 | B.3：`draw=morandigray + fill=accent!50` |
-| G3 | 多行文字挤一行 (如 "Chunking117 chunks") | 节点内 `\\` 静默失效 | C3：空容器 + 独立 title/sub/body 节点 |
-| G4 | 相邻盒 0.1-0.3cm 肉眼看不到的重叠 | 布局前没算 | D1：注释里写出 [x_min, x_max] + gap |
-| G5 | Backtrack 弧和 layer label 挤顶部 | 同一个容器顶部两元素抢位置 | C2：layer label 换 `anchor=south east` |
-| G6 | 标题和 metadata 叠印 | 同 y 放两 node | C8：两行分开 y，间距 0.4cm |
-| G7 | `-\|` 或 `\|-` 配 rounded corners 出现诡异圆弧 | TikZ 圆角算法 | E.3：三段显式 polyline |
-| G8 | 跨带垂直箭头歪斜 | `.south/.north` anchor 计算偏差 | C5：显式 `(center_x, y1) -- (center_x, y2)` |
-| G9 | Write .tex 被 unicode-guard 拦 | 注释里有 Unicode `±` `−` | D1：注释只用 ASCII `+/-` `-` |
-| G10 | `pdflatex && rm` 触发权限提示 | Claude Code 复合命令整体匹配 | 两条独立 Bash 调用，或白名单 `Bash(pdflatex * && rm *)` |
+#### 2A.3.1 布局几何、路由与常见陷阱
+
+坐标账本、间距公式、路由规则见 `references/tikz-semantic-minimal.md` 第 7–8 节。出 bug 先查：
+
+| 症状 | 原因 | 修复 |
+|:-----|:-----|:-----|
+| 多行文字挤成一行 | style 缺 `align` 或 `text width`，`\\` 静默失效 | style 同时写 `align=center, text width=…` |
+| 相邻框肉眼难辨的重叠 | 布局前没算 | 注释里写每个框 [x_min, x_max] 与 gap（≥ 0.4cm） |
+| 上下分组框不对齐 / 偏心 | 用了 `fit` | 显式坐标 + `minimum width/height` |
+| 跨行垂直箭头歪斜 | 不同大小框的 anchor 偏差 | 显式 `(x,y1) -- (x,y2)` |
+| `-\|`/`\|-` 配 rounded corners 出怪弧 | TikZ 圆角算法 | 改显式 polyline |
+| 反馈线穿过框或标签 | 没留路由通道 | 在账本里预留通道，走图外侧 |
+| 两个文本节点叠印 | 同 y 且 x 范围重叠 | 分开 y（约 0.4cm） |
+| 写 .tex 被 unicode-guard 拦 | 注释或正文里有 `±` `−` `·` `—` 等 | 改 ASCII 或 LaTeX 命令（`$\pm$`、`--`、`$\cdot$`） |
 
 ### 2A.3.2 Figure Flywheel 图表飞轮审查模式（强制）
 
@@ -610,8 +304,10 @@ row_y_step = box_height + row_gap    (row_gap ≥ 0.3cm)
 3. 文本框之间、子图之间、层容器与内部元素之间是否留有足够间距，是否存在肉眼不明显但实际重叠的边界。
 4. 阅读顺序是否自然，层级结构是否清楚，视觉重心是否偏移，是否因为局部改动破坏了整体结构。
 5. 字号、线宽、边距、留白、图例位置、坐标刻度密度是否达到出版图质量。
-6. 配色是否仍符合 Morandi 色板和“三色纪律”，新增元素是否引入了突兀颜色或不一致强调。
-7. 上一轮已经修好的问题是否被新改动重新引入。
+6. 视觉语法是否与方法和 benchmark 匹配；颜色是否只承担已声明的语义，黑白/灰度下是否仍能理解。
+7. 行列中心、基线、面板边界和重复单元是否严格对齐；对齐是否主要由网格和留白实现，而不是靠装饰框补救。
+8. 在 manuscript 最终嵌入尺寸下，正文、数学符号、箭头标签和图例是否仍可读。
+9. 上一轮已经修好的问题是否被新改动重新引入。
 
 **飞轮规则**：
 - 发现任何一个问题，就在已确认的目标图源文件范围内修改、重新渲染、重新看图。
@@ -625,6 +321,7 @@ row_y_step = box_height + row_gap    (row_gap ≥ 0.3cm)
 
 ```bash
 cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{description}.tex 2>&1 | tail -5
+# 中文图用 xelatex
 ```
 
 **编译层**：
@@ -636,10 +333,9 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
 
 每次编译成功后，**主 agent 必须用 Read 工具打开 PDF** 视觉检查。检查 checklist（每一条都要确认）：
 
-1. **盒子是否渲染到 `minimum width/height`？**
-   - 常见坑：`fill=<color>!30` 等过淡填充让盒子几乎不可见
-   - 常见坑：`draw=<某个重定义的 xcolor 命名色>` 可能与预定义色冲突导致边框不显示（如 `draw=steelblue` 与 xcolor 的 `steelblue` 冲突）
-   - **修复**：fill 不低于 !50 / !55；改用 `draw=morandigray` 灰边 + 彩色 fill 的稳定组合
+1. **节点边界、留白和文字是否清楚？**
+   - 普通框白底灰边；语义框浅填深边清晰可见；分区带足够浅，不抢框。
+   - 只有 `legacy-morandi` 才沿用旧版高饱和度填充规则。
 2. **节点内多行文本是否换行？**
    - 常见坑：`\\` 在某些 style 下没生效，title 和 subtitle 挤在一行（如 "Chunking117 chunks"）
    - **修复**：style 必须显式含 `align=center`，或者用**独立的 title 节点 + 独立的 sub 节点**相对盒子 center 做 yshift 定位
@@ -650,14 +346,20 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
    - 检查每个容器的 `minimum width/height` 能否包住所有子元素 + 0.3cm 内边距
    - Backtrack / 回流弧线是否压到容器上边框（通常因为容器高度不够给弧线留空间）
 5. **标签位置是否被其他元素遮挡？**
-   - Layer label 是否被虚线边框穿过？（须 `anchor=south west` + 向外偏移 0.08cm）
+   - 分组 / 阶段标题是否被虚线边框穿过？（放在框外上方，`anchor=south`）
    - 箭头 midway label 是否被另一条线覆盖？
-6. **三色纪律是否守住？**
-   - 全图强调色是否 ≤ 3 种？结构性元素是否全灰？
-   - Fill 和 draw 是否二选一（避免同时 `fill=彩色` + `draw=同色` 双装饰）
+6. **方法与 benchmark 视觉语法是否守住？**
+   - 图是否准确表达方法中的对象、方向、时间、层级和不对称关系？
+   - 是否出现 benchmark 没有、模型也没有的装饰性层、反馈箭头或因果暗示？
+   - 语义色是否 ≤ 3 组、每组单一含义、都有图例或直接标注？结构元素是否全灰？
+   - 实线框、虚线框、实线箭头、虚线箭头是否各自保持单一且一致的语义？
 7. **对齐是否严格？**
    - 同一"带"内的盒子中心 y 是否一致？同一列的 x 是否一致？
    - 上下两带的对应列 x 是否对齐（方便垂直连接）？
+   - 重复结构是否复用同一组坐标、尺寸和间距，而不是逐个目测摆放？
+8. **最终尺寸是否通过？**
+   - 将图嵌入 manuscript 后重新渲染对应页；不得只检查 standalone PDF。
+   - 在目标栏宽下检查字号、线宽、断词、图例和 caption 占用；必要时做灰度预览和 50% 缩放检查。
 
 **循环规则**：
 - 发现 ≥1 条缺陷 → 立刻修代码，重编译，再 Read PDF，再查 checklist
@@ -665,7 +367,7 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
 - **不要**只凭视觉"看起来差不多"就收工——每条 checklist 条目都要明确 ✓ 或确认不适用
 - 单个图的迭代次数不设上限，但如果 > 5 轮还没收敛，回到草稿阶段重新想布局
 
-**终止条件**：checklist 7 条全过 → 才能把图交给用户 / 进入下一张图。
+**终止条件**：checklist 8 条全过 → 才能把图交给用户 / 进入下一张图。
 
 ### 2A.5 展示结果
 
@@ -706,13 +408,13 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
 
 | # | 维度 | 状态 | 问题 | 建议 |
 |:-:|:-----|:----:|:-----|:-----|
-| 1 | 配色 | 🔴 | 使用 matplotlib 默认色 | 切换 Morandi 色板 |
-| 2 | 字体 | 🟡 | sans-serif，与正文不一致 | 设置 Times New Roman |
+| 1 | 视觉编码 | 🔴 | 使用默认色且颜色无统计语义 | 按变量类型与 benchmark 重建设计 |
+| 2 | 字体 | 🟡 | 最终栏宽下低于期刊字号 | 按目标期刊与全篇图件统一 |
 | 3 | 标注 | ✅ | 轴标签完整 | — |
 | 4 | 布局 | 🟡 | 图例位置遮挡数据 | 移至底部水平排列 |
 | 5 | 子图 | ⬜ | 单图，不适用 | — |
 | 6 | 分辨率 | 🔴 | PNG 72dpi | 改为 PDF 300dpi |
-| 7 | 尺寸 | 🟡 | 宽高比不适合单栏 | 调整为 7"×5" |
+| 7 | 尺寸 | 🟡 | 未按最终栏宽设计 | 锁定目标宽度与最终字号 |
 | 8 | 细节 | 🟡 | 刻度标签过密 | 减少刻度数量 |
 ```
 
@@ -733,7 +435,7 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
 
 | 方面 | 当前图 | 参考图 | 建议调整 |
 |:-----|:-------|:-------|:---------|
-| 配色 | 默认蓝橙 | 低饱和 Morandi | 切换色板 |
+| 视觉编码 | 默认蓝橙 | 一组中性色 + 一个信号色 | 按数据语义重设编码 |
 | 布局 | 单面板 | 左右双面板 | 考虑拆分为 (a)(b) |
 | 字号 | 偏小 | 10pt 正文 | 放大标签字号 |
 ```
@@ -744,11 +446,11 @@ cd {project_root}/{FIGURES_DIR} && pdflatex -interaction=nonstopmode fig{N}_{des
 🎨 美化方案（共 {N} 处调整）
 
 优先级高:
-1. [配色] 全局配色切换为 Morandi 色板
+1. [视觉编码] 按变量类型、统计关系和 benchmark 重设颜色/线型/形状
 2. [分辨率] 输出格式改为 PDF 300dpi
 
 优先级中:
-3. [字体] 设置 Times New Roman / serif
+3. [字体] 按目标期刊与项目统一字体，并在最终栏宽下校验字号
 4. [布局] 图例移至右下角
 
 优先级低:
@@ -765,34 +467,33 @@ AskUserQuestion，循环直到确认。
 
 > ⚠️ **占位符替换契约**：下方模板中的 `{FIGURES_DIR}`、`{N}`、`{desc}` 是**写盘前**必须由主 agent Edit 替换为实际字符串的占位符——Python/R 运行时**不会**展开它们。例如 `{FIGURES_DIR}` → `structure/figures_tables/figures/`、`{N}` → `3`、`{desc}` → `network_topology`。忘记替换会生成字面量名为 `{FIGURES_DIR}fig{N}_{desc}.pdf` 的文件。
 
-**Python (matplotlib)**：
+**Python (matplotlib，示意；颜色和尺寸必须由 figure spec 替换)**：
 ```python
 import matplotlib.pyplot as plt
-MORANDI = {"steel_blue": "#576fa0", "gold": "#e3b87f", "rose": "#b57979",
-           "gray": "#7c7c7c", "gray_mid": "#b5b5b5",
-           "steel_blue_light": "#a7b9d7", "gold_light": "#fadcb4",
-           "rose_light": "#dea3a2", "gray_light": "#cfcece"}
+# semantic-minimal token（与 TikZ 同一组；只取需要的语义）
+INK, MUTED = "#404040", "#787878"
+SEM = {"A": ("#26548C", "#E2ECF7"), "B": ("#B0541A", "#FBE5D3"), "C": ("#2E6E3E", "#E0F0E2")}  # (线/点, 填充/置信带)
 plt.rcParams.update({
-    "font.family": "serif", "font.serif": ["Times New Roman"],
-    "font.size": 10, "axes.labelsize": 10, "xtick.labelsize": 9,
-    "ytick.labelsize": 9, "legend.fontsize": 9, "figure.dpi": 300,
+    "font.family": "Times New Roman",
+    "font.serif": ["Times New Roman", "TeX Gyre Termes", "Times"],
+    "pdf.fonttype": 42, "svg.fonttype": "none",
 })
 # 输出
 plt.savefig("{FIGURES_DIR}fig{N}_{desc}.pdf", bbox_inches="tight", dpi=300)
 ```
 
-**R (ggplot2)**：
+**R (ggplot2，示意；theme 与 palette 必须由 figure spec 替换)**：
 ```r
-morandi <- c("#576fa0", "#e3b87f", "#b57979", "#7c7c7c",
-             "#a7b9d7", "#fadcb4", "#dea3a2", "#b5b5b5", "#cfcece")
-theme_morandi <- theme_minimal(base_family = "Times New Roman") +
+ink <- "#404040"; muted <- "#787878"
+sem <- c(A = "#26548C", B = "#B0541A", C = "#2E6E3E")        # 线 / 点
+sem_fill <- c(A = "#E2ECF7", B = "#FBE5D3", C = "#E0F0E2")   # 填充 / 置信带
+theme_journal <- theme_classic(base_family = "Times New Roman") +
   theme(text = element_text(family = "Times New Roman"),
-        plot.title = element_text(size = 12, face = "bold"),
-        axis.title = element_text(size = 10),
-        axis.text = element_text(size = 9),
-        legend.text = element_text(size = 9),
         panel.grid.minor = element_blank())
-ggsave("{FIGURES_DIR}fig{N}_{desc}.pdf", width = 7, height = 5, dpi = 300)
+ggsave("{FIGURES_DIR}fig{N}_{desc}.pdf",
+       width = target_width_mm / 25.4,
+       height = target_height_mm / 25.4,
+       device = cairo_pdf)
 ```
 
 ### 2B.6 运行脚本 + 视觉自查闭环（强制）
@@ -809,8 +510,8 @@ cd {project_root} && Rscript {FIGURES_DIR}fig{N}_{desc}.R 2>&1 | tail -20
 - 运行成功 → **必须 Read PDF** 自查 checklist：
   1. 坐标轴标签是否被截断？（`bbox_inches="tight"` 是否生效）
   2. 图例是否遮挡数据？位置是否合理？
-  3. 字号在正文尺寸下是否可读？（一般正文宽度下 9-10pt 最小）
-  4. 颜色是否严格 Morandi 色板？（不可出现 matplotlib 默认红绿蓝）
+  3. 字号在最终正文栏宽下是否可读？（按目标期刊规范；不得用 standalone 放大预览代替最终尺寸检查）
+  4. 颜色、线型和形状是否与变量类型、统计语义、benchmark 及全篇语义映射一致？
   5. 多面板 (a)(b) 标签是否一致、对齐？
   6. Y 轴数值范围是否合理（不应有过多空白或刻度标签溢出）？
 
@@ -860,10 +561,12 @@ AskUserQuestion：
 数据: {data/model_results.csv}
 语言: R（推荐理由：项目已有 R 脚本，ggplot2 生态适合此类图）
 布局: {单面板 / 双面板 (a)(b)}
-配色: Morandi 色板
-  - 系列1: steel_blue #576fa0
-  - 系列2: gold #e3b87f
-  - 显著性: rose #b57979
+视觉编码:
+  - 参考 benchmark: {论文 + figure}
+  - 中性基线: {灰 #404040 / #787878}
+  - 语义色: {A 蓝 = …；B 橙 = 核心信号；C 绿 = …}（≤3，全篇同义）
+  - 不确定性: {interval / alpha / hatch}
+目标尺寸: {single/double column, width_mm × height_mm}
 
 确认？可以调整。
 ```
@@ -873,10 +576,10 @@ AskUserQuestion，循环直到确认。
 ### 2C.3 生成脚本
 
 生成完整的 Python/R 脚本，预配置：
-- Morandi 色板
-- Times New Roman 字体
-- PDF 300 DPI 输出
-- 合理的 figsize（单栏 7"×5" / 双栏 14"×5"）
+- semantic-minimal token 下、与变量类型、统计语义、benchmark 和目标期刊一致的视觉编码
+- 项目统一字体；无项目约束时默认 Times New Roman
+- PDF/SVG 矢量输出，必要时附 300--600 DPI 预览
+- 按目标期刊最终栏宽反推尺寸与字号，而不是固定 7"×5"
 - 完整的坐标轴标签和图例
 
 写入 `{FIGURES_DIR}fig{N}_{description}.{py|R}`。
@@ -895,7 +598,7 @@ AskUserQuestion，循环直到确认。
 python3 ~/.claude/skills/shared/figure_audit.py inventory --figures-dir {FIGURES_DIR}
 ```
 
-脚本提取每个图的：颜色定义、字体设置、输出格式、DPI、尺寸。
+脚本提取每个图的：颜色定义、字体设置、输出格式、DPI、尺寸，并标出 semantic-minimal token 之外的颜色。
 输出 `_figure_audit.json` + stdout 汇总表。
 
 VERIFY: PASS = 全部一致。FAIL = 有不一致项。
@@ -903,10 +606,13 @@ VERIFY: PASS = 全部一致。FAIL = 有不一致项。
 ### 2D.2 主 Agent 语义分析
 
 在脚本机械检查基础上，主 Agent 补充语义级检查：
-- 配色方案是否全局统一（不只是"用了 hex 色"，还要看"用的是同一套色板吗"）
+- 每张图是否与其方法、图件功能和 benchmark 视觉语法匹配，而非只追求全篇同色
+- 跨图共享元素的颜色、形状和线型语义是否一致；不同图件类型是否保留必要的差异
+- TikZ 结构图是否遵守 `semantic-minimal`（或有明确理由启用其他 profile）；数据图是否使用同一组 token 且语义一致
 - 标签风格一致性（(a)(b)(c) vs A/B/C vs 无标签）
 - 坐标轴标注风格（Title Case vs sentence case vs ALL CAPS）
 - 图例风格（框内 vs 框外，位置是否统一）
+- 最终栏宽下的字号、线宽、灰度可读性与 panel 对齐
 
 ### 2D.3 展示审计报告
 
@@ -917,16 +623,18 @@ VERIFY: PASS = 全部一致。FAIL = 有不一致项。
 
 | 维度 | 状态 | 详情 |
 |:-----|:----:|:-----|
-| 配色一致性 | 🟡 | fig1-fig4 Morandi，fig5 使用 R 默认色 |
-| 字体一致性 | ✅ | 全部 Times New Roman / newtxtext |
+| 方法/benchmark 匹配 | 🟡 | Fig. 2 的层间箭头可能暗示模型未估计的实时反馈 |
+| 视觉 profile | 🟡 | Fig. 2 用了 5 种颜色且无图例；按 semantic-minimal 收到 ≤3 组语义色 |
+| 字体一致性 | ✅ | 全部使用项目锁定的 Times New Roman 图内标签 |
 | 输出格式 | 🔴 | fig3 为 PNG，其余 PDF |
-| 尺寸一致性 | ✅ | 全部 7"×5" |
+| 尺寸一致性 | ✅ | 均按目标双栏宽度 183 mm 设计并检查最终字号 |
 | 标签风格 | ✅ | 全部 (a)(b)(c) 标签 |
-| TikZ 风格 | ✅ | 全部 Stealth 箭头 + Morandi 填充 |
+| 对齐与打印可读性 | 🟡 | Fig. 2 重复列未锁定同一坐标，缩放后标签低于目标字号 |
 
 修复建议:
-1. fig5: 切换为 Morandi 色板（修改 R 脚本第 15 行）
-2. fig3: 输出格式改为 PDF（修改 savefig 参数）
+1. Fig. 2: 先按方法语义修正层间关系，再用 benchmark 驱动布局
+2. Fig. 2: 切换 semantic-minimal、补图例并锁定行列坐标
+3. Fig. 3: 输出格式改为 PDF
 ```
 
 AskUserQuestion：

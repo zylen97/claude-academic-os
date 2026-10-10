@@ -13,19 +13,40 @@ import re
 import sys
 
 
-# Morandi reference palette (canonical hex values)
-MORANDI_PALETTE = {
-    "steel_blue": "#576fa0",
-    "steel_blue_light": "#a7b9d7",
-    "gold": "#e3b87f",
-    "gold_light": "#fadcb4",
-    "rose": "#b57979",
-    "rose_light": "#dea3a2",
-    "gray_deep": "#7c7c7c",
-    "gray_mid": "#b5b5b5",
-    "gray_light": "#cfcece",
+# semantic-minimal tokens (see figure/references/tikz-semantic-minimal.md)
+SEMANTIC_PALETTE = {
+    "ink": "#404040",
+    "muted": "#787878",
+    "optF": "#f2f2f2",
+    "bandA": "#f7f7f7",
+    "bandB": "#eeeeee",
+    "sAF": "#e2ecf7", "sAD": "#26548c",
+    "sBF": "#fbe5d3", "sBD": "#b0541a",
+    "sCF": "#e0f0e2", "sCD": "#2e6e3e",
 }
-MORANDI_HEX_SET = {v.lower() for v in MORANDI_PALETTE.values()}
+PALETTE_HEX_SET = {v.lower() for v in SEMANTIC_PALETTE.values()}
+
+
+def definecolor_hex(model, value):
+    """Convert a \\definecolor HTML/RGB/rgb/gray value to #rrggbb, or None."""
+    try:
+        if model == "HTML":
+            return "#" + value.strip().lower()
+        parts = [float(x) for x in value.split(",")]
+        if model == "RGB" and len(parts) == 3:
+            return "#" + "".join(f"{int(round(x)):02x}" for x in parts)
+        if model == "rgb" and len(parts) == 3:
+            return "#" + "".join(f"{int(round(x * 255)):02x}" for x in parts)
+        if model == "gray" and len(parts) == 1:
+            return "#" + f"{int(round(parts[0] * 255)):02x}" * 3
+    except ValueError:
+        return None
+    return None
+
+
+def is_gray(hex_color):
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return max(r, g, b) - min(r, g, b) <= 6
 
 
 def extract_tikz_style(filepath):
@@ -48,9 +69,13 @@ def extract_tikz_style(filepath):
     draws = re.findall(r"draw=([a-zA-Z!0-9]+)", content)
     info["colors_used"] = sorted(set(fills + draws))
 
-    # Hex colors used inline
-    hex_colors = re.findall(r"#([0-9a-fA-F]{6})", content)
-    info["hex_colors"] = sorted(set(f"#{h.lower()}" for h in hex_colors))
+    # Hex colors: inline #rrggbb plus \\definecolor values
+    hex_colors = {f"#{h.lower()}" for h in re.findall(r"#([0-9a-fA-F]{6})", content)}
+    for _, model, value in colors_defined:
+        h = definecolor_hex(model, value)
+        if h:
+            hex_colors.add(h)
+    info["hex_colors"] = sorted(hex_colors)
 
     # Font packages
     font_pkgs = re.findall(r"\\usepackage(?:\[.*?\])?\{([^}]*)\}", content)
@@ -160,18 +185,17 @@ def extract_r_style(filepath):
     return info
 
 
-def check_morandi_compliance(hex_colors):
-    """Check how many colors match the Morandi palette."""
-    if not hex_colors:
+def check_palette_compliance(hex_colors):
+    """Check colors against the semantic-minimal tokens; pure grays are always allowed."""
+    colored = [c for c in hex_colors if not is_gray(c)]
+    if not colored:
         return "N/A", []
-    matches = [c for c in hex_colors if c.lower() in MORANDI_HEX_SET]
-    non_matches = [c for c in hex_colors if c.lower() not in MORANDI_HEX_SET]
-    if len(matches) == len(hex_colors):
-        return "FULL", non_matches
-    elif matches:
-        return "PARTIAL", non_matches
-    else:
-        return "NONE", non_matches
+    off = [c for c in colored if c.lower() not in PALETTE_HEX_SET]
+    if not off:
+        return "FULL", off
+    if len(off) < len(colored):
+        return "PARTIAL", off
+    return "NONE", off
 
 
 def cmd_inventory(args):
@@ -226,7 +250,7 @@ def cmd_inventory(args):
 
     # Build summary
     print("=== FIGURE STYLE INVENTORY ===\n")
-    print(f"{'#':<4} {'Tool':<8} {'File':<40} {'Colors':<10} {'Morandi':<10} {'Font':<8} {'Format':<8}")
+    print(f"{'#':<4} {'Tool':<8} {'File':<40} {'Colors':<10} {'Palette':<10} {'Font':<8} {'Format':<8}")
     print("-" * 100)
 
     all_issues = []
@@ -235,11 +259,12 @@ def cmd_inventory(args):
         fname = os.path.basename(r["file"])
         tool = r["tool"]
         hex_colors = r.get("hex_colors", [])
-        morandi_status, non_morandi = check_morandi_compliance(hex_colors)
+        palette_status, off_palette = check_palette_compliance(hex_colors)
 
         # Font check
         if tool == "tikz":
-            has_font = "newtxtext" in str(r.get("font_packages", []))
+            pkgs = str(r.get("font_packages", []))
+            has_font = "newtxtext" in pkgs or "fontspec" in pkgs
             font_str = "OK" if has_font else "MISS"
         else:
             has_font = r.get("has_times", False)
@@ -253,16 +278,17 @@ def cmd_inventory(args):
             fmt_str = ",".join(fmts) if fmts else "?"
 
         print(
-            f"{i:<4} {tool:<8} {fname:<40} {len(hex_colors):<10} {morandi_status:<10} {font_str:<8} {fmt_str:<8}"
+            f"{i:<4} {tool:<8} {fname:<40} {len(hex_colors):<10} {palette_status:<10} {font_str:<8} {fmt_str:<8}"
         )
 
         # Collect issues
-        if morandi_status == "NONE" and hex_colors:
-            all_issues.append(f"{fname}: no Morandi colors (uses {hex_colors[:3]}...)")
-        elif morandi_status == "PARTIAL":
-            all_issues.append(f"{fname}: non-Morandi colors found: {non_morandi[:3]}")
+        if palette_status in ("NONE", "PARTIAL"):
+            all_issues.append(
+                f"{fname}: colors outside semantic-minimal tokens: {off_palette[:3]}"
+                " (fine only if the figure uses legacy-morandi or a declared journal profile)"
+            )
         if font_str == "MISS":
-            all_issues.append(f"{fname}: missing Times New Roman / newtxtext font")
+            all_issues.append(f"{fname}: missing Times font (newtxtext / fontspec / Times New Roman)")
         if "png" in r.get("output_formats", []):
             all_issues.append(f"{fname}: outputs PNG (should be PDF)")
 
