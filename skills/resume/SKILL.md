@@ -15,13 +15,13 @@ description: "新 session 快速加载项目上下文：读项目阶段、analys
 
 ## 步骤 0：前置检查
 
-当前目录不存在 `CLAUDE.md` → 停止，提示用户切换到项目根目录。
+当前目录既没有 `CLAUDE.md` 也没有 `FUND.md` → 停止，提示用户切换到项目根目录。
 
 ## 步骤 0.5：项目类型检测
 
 1. `structure/` + `manuscript.tex` → **英文论文项目**（步骤 1–8）
 2. `chapters/` + `CLAUDE.md` 含 `## 撰写进度` → **学位论文项目**：读合同阶段 + 撰写进度表、`chapters/*.tex` 结构、源项目信息（如有）
-3. `sections/` + `CLAUDE.md` 含 `## 章节规划` → **基金项目**：读合同阶段 + 章节规划、`sections/*.md` 进度
+3. 存在 `FUND.md` → **基金项目**（规格 `~/.claude/skills/shared/FUND-PROTOCOL.md`）：阶段读 `FUND.md`，章节进度读 `CLAUDE.md` 的 `## 章节规划` 状态列，截止日期读 FUND.md 的提交日期字段
 4. 都不匹配 → **通用模式**：只读 `CLAUDE.md` + git log 后输出简述
 
 学位论文与基金项目走各自的简化流程，然后直接跳到步骤 7、8。
@@ -110,6 +110,6 @@ git log -15 --date=short --format="%ad %s"
 - **submitted**：无主动提醒
 - **revision-R{N}**：`revision-R*/` 不存在 → `/rev-init`；`response-letter.tex` 有 `[TO BE FILLED]` → `/rev-respond`
 - **学位论文**：init → `/diss-init`；literature → `/lit-plan` / `/lit-workflow`；drafting → 未 outlined 的章节 `/diss-outline`，已 outlined 未 drafted `/diss-draft`；polishing → 未 polished `/diss-polish`，全部 polished `/diss-finalize`
-- **基金项目**：init → `/fund-init`；literature → `/lit-plan` / `/lit-workflow`；outlining → `/fund-outline`；drafting → `/fund-draft`；reviewed / polishing → `/fund-polish`
+- **基金项目**：init → `/lit-plan` 或 `/fund-outline`；literature → `/lit-workflow`；outlining → `/fund-outline`；drafting → `/fund-draft`；polishing → `/fund-polish`；submitted → 出结果后 `/fund-result result`；awarded / rejected / 未申报 → 无主动提醒（未中且计划重申 → `/fund-init 重申 {本项目}`）。全局情况用 `/fund-hub`
 
 最后一句问用户："需要从哪里继续？"
