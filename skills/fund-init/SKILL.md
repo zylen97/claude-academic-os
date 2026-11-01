@@ -131,6 +131,8 @@ description: "初始化基金申请项目：按 年度_申请人代码_基金简
 
 ### 5.4 fund-idea.md 与 idea.md
 
+Step 1 用到的 fund-idea 若引用了 `_drafts/` 里的 `立项分析_*.md` 或 `题目对标_*.md`（/fund-mine 在项目建立前生成的），一并 `mv` 到本项目 `reference/`，并把 fund-idea 里的路径改成新位置。
+
 把 Step 1 用到的 fund-idea 复制为项目根目录 `fund-idea.md`，再复制一份到 `structure/0_global/idea.md`（供 /lit-plan 读取）。重申模式且没有新 fund-idea 时，用前序项目的 `fund-idea.md`；前序没有就根据前序正文生成一份精简版。两份内容保持一致，任一处修改后用 `cp` 同步。
 
 ### 5.5 main.tex（仅交付类型含 latex）
