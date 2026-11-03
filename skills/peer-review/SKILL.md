@@ -31,7 +31,7 @@ Review admission。审查可以广泛，但正式意见只能报告有精确位�
 
 - `.../02-Research/papers/`（含所有 `zy*_latexfile/` 子目录）
 - `.../_GYM group dropbox/_gym paper/`（含 `dj*`/`zz*`/`xq*`/`zl*` 子目录）
-- `.../02-Research/dissertations/`
+- `.../03-Teaching/07_指导学生学位论文_dissertations/`
 - `.../02-Research/fundings/`
 
 推荐独立审稿目录：`~/Library/CloudStorage/Dropbox/02-Research/peer-review-tasks/{journal}_{manuscript_id}/`
