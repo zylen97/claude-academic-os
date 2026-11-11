@@ -48,11 +48,11 @@ description: 根据研究 idea 规划 5-7 个文献检索方向、功能标签�
 |:---|:---|:---|:---|
 | `papers/` 或 `_gym paper/` | `paper` | `structure/0_global/idea.md` | `structure/2_literature/` |
 | `dissertations/` | `diss` | `structure/0_global/idea.md` → `../源论文_latexfile/structure/0_global/idea.md` → `CLAUDE.md § 章节规划` | `structure/2_literature/` |
-| `fundings/` | `fund` | `structure/0_global/idea.md` → `fund-idea.md` → `_drafts/fund-idea_*.md`（最新） | `structure/2_literature/` |
+| `fundings/` | `fund` | 不适用：基金项目的文献走 `/fund-lit`（输出到 `02_文献/`，见 `~/.claude/skills/shared/FUND-PROTOCOL.md` 第 5 节）。在 `fundings/` 下调用本 skill 时停止，提示改用 `/fund-lit` | — |
 
 - 读取项目 `CLAUDE.md` → 项目编号、英文标题、一句话概括、方法、目标期刊。
 - 判断成熟度 `{IDEA_MATURITY}`：`mature`（有明确 Gap/RQ → 方向围绕 Gap/方法论精准设计）或 `exploratory`（主题明确但 Gap/RQ 不明 → 方向偏探索、覆盖面更广）。写入方案文件头供下游参考。
-- 降级链全部失败 → 停止，提示至少提供研究主题和大致方向（fund 先跑 `/fund-mine`；diss 先跑 `/diss-init`）。
+- 降级链全部失败 → 停止，提示至少提供研究主题和大致方向（diss 先跑 `/diss-init`）。
 - `{LIT_DIR}` 只是内部变量；向用户展示或写入文件时一律展开为字面路径 `structure/2_literature/`。
 
 ### 0.3 已有检索方案

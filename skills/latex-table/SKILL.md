@@ -23,7 +23,7 @@ Step 0 — 项目类型探测 + 确定 `{TABLES_FILE}`：
 |:---|:---|
 | `papers/` / `_gym paper/`（英文小论文） | `structure/figures_tables/tables.tex` |
 | `dissertations/`（学位论文） | `structure/figures_tables/tables_{章号}.tex`（按章分文件，避免所有表堆在一起） |
-| `fundings/`（基金） | `structure/figures_tables/tables.tex` |
+| `fundings/`（基金） | `04_图表/tables.tex` |
 | `$PWD` 不在上述目录 | AskUserQuestion 确认路径，不默认写入 |
 
 **学位论文章号推断**：
